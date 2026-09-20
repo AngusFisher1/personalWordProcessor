@@ -1,0 +1,369 @@
+/**
+ * Generates a SEED corpus of .docx files into test/corpus/.
+ *
+ * These are synthetic. The spec is right that synthetic documents only
+ * exercise the paths someone already thought of, so this is a floor, not the
+ * corpus: drop real .docx files into test/corpus/ and the harness picks them
+ * up automatically. What these do cover is structure this app does not itself
+ * generate - tables, headers and footers, multi-level numbering, landscape and
+ * legal page sizes, tracked changes, content controls - which is exactly what
+ * the importer has to survive.
+ *
+ *   node test/make-corpus.mjs
+ */
+import {
+  AlignmentType,
+  Document,
+  ExternalHyperlink,
+  Footer,
+  Header,
+  HeadingLevel,
+  LevelFormat,
+  PageNumber,
+  PageOrientation,
+  Packer,
+  Paragraph,
+  Table,
+  TableCell,
+  TableRow,
+  TextRun,
+  WidthType,
+} from 'docx';
+import JSZip from 'jszip';
+import { mkdir, writeFile } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const OUT = join(HERE, 'corpus');
+
+const lorem =
+  'This paragraph exists to occupy a realistic amount of space on the page so that pagination has something to do. ';
+
+async function save(name, doc) {
+  const buf = await Packer.toBuffer(doc);
+  await writeFile(join(OUT, name), buf);
+  console.log('  ' + name + '  ' + buf.length + ' bytes');
+}
+
+function para(text, opts = {}) {
+  return new Paragraph({ text, ...opts });
+}
+
+/* ---------------- 1. resume ---------------- */
+async function resume() {
+  await save(
+    'resume.docx',
+    new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph({ text: 'Dana Whitfield', heading: HeadingLevel.TITLE }),
+            para('Bristol · dana@example.com · (555) 010-0100'),
+            new Paragraph({ text: 'Experience', heading: HeadingLevel.HEADING_1 }),
+            new Paragraph({ text: 'Staff Engineer, Northwind', heading: HeadingLevel.HEADING_3 }),
+            new Paragraph({
+              bullet: { level: 0 },
+              children: [
+                new TextRun('Rebuilt the '),
+                new TextRun({ text: 'billing pipeline', bold: true }),
+                new TextRun(' and cut invoice errors by '),
+                new TextRun({ text: '40%', italics: true }),
+                new TextRun('.'),
+              ],
+            }),
+            new Paragraph({ bullet: { level: 0 }, text: 'Mentored four engineers.' }),
+            new Paragraph({ bullet: { level: 1 }, text: 'Two were promoted within a year.' }),
+            new Paragraph({ text: 'Education', heading: HeadingLevel.HEADING_1 }),
+            para('B.S. Computer Science, State University'),
+          ],
+        },
+      ],
+    })
+  );
+}
+
+/* ---------------- 2. cover letter ---------------- */
+async function coverLetter() {
+  await save(
+    'cover-letter.docx',
+    new Document({
+      sections: [
+        {
+          children: [
+            para('12 March 2026'),
+            para('Dear hiring manager,'),
+            ...Array.from({ length: 6 }, (_, i) =>
+              para('Paragraph ' + (i + 1) + '. ' + lorem.repeat(3))
+            ),
+            para('Yours sincerely,'),
+            para('Dana Whitfield'),
+          ],
+        },
+      ],
+    })
+  );
+}
+
+/* ---------------- 3. contract with numbered clauses ---------------- */
+async function contract() {
+  await save(
+    'contract.docx',
+    new Document({
+      numbering: {
+        config: [
+          {
+            reference: 'clauses',
+            levels: [
+              { level: 0, format: LevelFormat.DECIMAL, text: '%1.', alignment: AlignmentType.START },
+              { level: 1, format: LevelFormat.DECIMAL, text: '%1.%2', alignment: AlignmentType.START },
+              { level: 2, format: LevelFormat.LOWER_ROMAN, text: '(%3)', alignment: AlignmentType.START },
+            ],
+          },
+        ],
+      },
+      sections: [
+        {
+          children: [
+            new Paragraph({ text: 'Services Agreement', heading: HeadingLevel.TITLE }),
+            ...[
+              [0, 'Definitions. In this agreement the following terms apply.'],
+              [1, 'Services means the work described in Schedule A.'],
+              [1, 'Fees means the amounts set out in Schedule B.'],
+              [2, 'Fees exclude value added tax.'],
+              [2, 'Fees are payable within thirty days.'],
+              [0, 'Term. This agreement runs for twelve months.'],
+              [1, 'Either party may terminate on notice.'],
+              [0, 'Governing law. The laws of England and Wales apply.'],
+            ].map(
+              ([level, text]) =>
+                new Paragraph({ text, numbering: { reference: 'clauses', level } })
+            ),
+          ],
+        },
+      ],
+    })
+  );
+}
+
+/* ---------------- 4. report with tables ---------------- */
+async function report() {
+  const row = (cells, header = false) =>
+    new TableRow({
+      tableHeader: header,
+      children: cells.map(
+        (t) =>
+          new TableCell({
+            children: [new Paragraph({ children: [new TextRun({ text: t, bold: header })] })],
+          })
+      ),
+    });
+  await save(
+    'report-tables.docx',
+    new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph({ text: 'Quarterly Report', heading: HeadingLevel.TITLE }),
+            para(lorem.repeat(4)),
+            new Paragraph({ text: 'Results', heading: HeadingLevel.HEADING_1 }),
+            new Table({
+              width: { size: 100, type: WidthType.PERCENTAGE },
+              rows: [
+                row(['Region', 'Revenue', 'Change'], true),
+                row(['North', '1,240', '+8%']),
+                row(['South', '980', '-3%']),
+                row(['East', '1,510', '+21%']),
+              ],
+            }),
+            para(lorem.repeat(3)),
+            new Paragraph({ text: 'Outlook', heading: HeadingLevel.HEADING_1 }),
+            para(lorem.repeat(5)),
+          ],
+        },
+      ],
+    })
+  );
+}
+
+/* ---------------- 5/6. landscape and legal ---------------- */
+async function landscape() {
+  await save(
+    'landscape.docx',
+    new Document({
+      sections: [
+        {
+          properties: { page: { size: { orientation: PageOrientation.LANDSCAPE } } },
+          children: [
+            new Paragraph({ text: 'Wide View', heading: HeadingLevel.HEADING_1 }),
+            ...Array.from({ length: 8 }, (_, i) => para('Row ' + i + '. ' + lorem.repeat(2))),
+          ],
+        },
+      ],
+    })
+  );
+}
+
+async function legal() {
+  await save(
+    'legal-size.docx',
+    new Document({
+      sections: [
+        {
+          // 8.5in x 14in in twips
+          properties: { page: { size: { width: 12240, height: 20160 } } },
+          children: [
+            new Paragraph({ text: 'Legal Size', heading: HeadingLevel.HEADING_1 }),
+            ...Array.from({ length: 12 }, (_, i) => para('Clause ' + i + '. ' + lorem.repeat(2))),
+          ],
+        },
+      ],
+    })
+  );
+}
+
+/* ---------------- 7. letterhead with header/footer ---------------- */
+async function letterhead() {
+  await save(
+    'letterhead.docx',
+    new Document({
+      sections: [
+        {
+          properties: { titlePage: true },
+          headers: {
+            first: new Header({ children: [para('NORTHWIND LIMITED')] }),
+            default: new Header({ children: [para('Northwind — continued')] }),
+          },
+          footers: {
+            default: new Footer({
+              children: [
+                new Paragraph({
+                  alignment: AlignmentType.CENTER,
+                  children: [
+                    new TextRun('Page '),
+                    new TextRun({ children: [PageNumber.CURRENT] }),
+                    new TextRun(' of '),
+                    new TextRun({ children: [PageNumber.TOTAL_PAGES] }),
+                  ],
+                }),
+              ],
+            }),
+          },
+          children: Array.from({ length: 20 }, (_, i) =>
+            para('Letterhead paragraph ' + i + '. ' + lorem.repeat(3))
+          ),
+        },
+      ],
+    })
+  );
+}
+
+/* ---------------- 8. hyperlinks and unusual font ---------------- */
+async function links() {
+  await save(
+    'links-and-fonts.docx',
+    new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph({
+              children: [
+                new TextRun('Visit '),
+                new ExternalHyperlink({
+                  children: [new TextRun({ text: 'the site', style: 'Hyperlink' })],
+                  link: 'https://example.com/docs',
+                }),
+                new TextRun(' for details.'),
+              ],
+            }),
+            new Paragraph({
+              children: [
+                new TextRun({ text: 'Set in Garamond. ', font: 'Garamond', size: 28 }),
+                new TextRun({ text: 'And in Consolas.', font: 'Consolas', size: 20 }),
+              ],
+            }),
+            ...Array.from({ length: 4 }, (_, i) => para('Body ' + i + '. ' + lorem.repeat(2))),
+          ],
+        },
+      ],
+    })
+  );
+}
+
+/* ---------------- 9. hand-built: tracked changes + content control ----------
+ * The docx library has no API for revision marks, and they are exactly the
+ * kind of thing the preservation vault exists for, so this one is written as
+ * raw OOXML.
+ * ---------------------------------------------------------------------- */
+async function trackedChanges() {
+  const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const body = `
+  <w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>Reviewed Document</w:t></w:r></w:p>
+  <w:p>
+    <w:r><w:t xml:space="preserve">The quick </w:t></w:r>
+    <w:ins w:id="1" w:author="Reviewer" w:date="2026-01-02T10:00:00Z"><w:r><w:t xml:space="preserve">and nimble </w:t></w:r></w:ins>
+    <w:del w:id="2" w:author="Reviewer" w:date="2026-01-02T10:00:00Z"><w:r><w:delText xml:space="preserve">lazy </w:delText></w:r></w:del>
+    <w:r><w:t>brown fox.</w:t></w:r>
+  </w:p>
+  <w:sdt>
+    <w:sdtPr><w:alias w:val="Client"/><w:tag w:val="client"/><w:id w:val="99"/><w:text/></w:sdtPr>
+    <w:sdtContent><w:p><w:r><w:t>Acme Corporation</w:t></w:r></w:p></w:sdtContent>
+  </w:sdt>
+  <w:p><w:r><w:t>${'A closing paragraph. '.repeat(10)}</w:t></w:r></w:p>
+  <w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>`;
+
+  const zip = new JSZip();
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+<Default Extension="xml" ContentType="application/xml"/>
+<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+</Types>`
+  );
+  zip.file(
+    '_rels/.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`
+  );
+  zip.file(
+    'word/_rels/document.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+</Relationships>`
+  );
+  zip.file(
+    'word/styles.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:styles xmlns:w="${W}">
+<w:style w:type="paragraph" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+<w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/></w:style>
+</w:styles>`
+  );
+  zip.file(
+    'word/document.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="${W}" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>${body}</w:body></w:document>`
+  );
+  const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  await writeFile(join(OUT, 'tracked-changes.docx'), buf);
+  console.log('  tracked-changes.docx  ' + buf.length + ' bytes');
+}
+
+await mkdir(OUT, { recursive: true });
+console.log('Writing seed corpus to test/corpus/');
+await resume();
+await coverLetter();
+await contract();
+await report();
+await landscape();
+await legal();
+await letterhead();
+await links();
+await trackedChanges();
+console.log('Done. Add real .docx files to test/corpus/ - the harness picks them up.');

@@ -7,13 +7,18 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "corpus": "node test/make-corpus.mjs",
+    "build:harness": "vite build --config test/vite.harness.config.ts",
+    "test:roundtrip": "npm run build:harness && node test/roundtrip.mjs"
   },
   "devDependencies": {
+    "@xmldom/xmldom": "^0.9.12",
     "typescript": "^5.6.3",
     "vite": "^5.4.10"
   },
   "dependencies": {
-    "docx": "^9.7.1"
+    "docx": "^9.7.1",
+    "jszip": "^3.10.2"
   }
 }

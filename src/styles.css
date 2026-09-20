@@ -3,11 +3,16 @@
    that changes rendered height without changing the measured height shows up
    as a pagination bug. */
 :root {
+  /* All set by JS from the document's page setup, which an imported .docx
+     supplies from its w:sectPr. */
   --page-w: 816px;  /* 8.5in @ 96dpi */
   --page-h: 1056px; /* 11in  @ 96dpi */
-  --pad: 48px;      /* margin preset, set by JS */
-  --content-w: calc(var(--page-w) - 2 * var(--pad));
-  --content-h: calc(var(--page-h) - 2 * var(--pad));
+  --pad-t: 48px;
+  --pad-r: 48px;
+  --pad-b: 48px;
+  --pad-l: 48px;
+  --content-w: calc(var(--page-w) - var(--pad-l) - var(--pad-r));
+  --content-h: calc(var(--page-h) - var(--pad-t) - var(--pad-b));
   --ui: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --chrome: #f1f1f2;
   --chrome-line: #d8d8dc;
@@ -74,6 +79,27 @@ html, body {
 #toolbar .status { font-size: 12px; color: #5f6368; padding-right: 4px; }
 #toolbar .status.err { color: #c5221f; font-weight: 600; }
 
+#banner {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 7px 12px;
+  background: #fef7e0;
+  border-bottom: 1px solid #f0d78c;
+  font-size: 12px;
+  color: #5c4813;
+}
+#banner[hidden] { display: none; }
+#banner button {
+  font: 12px var(--ui);
+  border: 1px solid #e0c98a;
+  background: #fff;
+  border-radius: 4px;
+  padding: 2px 8px;
+  cursor: pointer;
+}
+
 /* ---------- document surface ---------- */
 
 #doc {
@@ -87,7 +113,7 @@ html, body {
   box-sizing: border-box; /* otherwise padding pushes the page past 1056px */
   width: var(--page-w);
   height: var(--page-h);
-  padding: var(--pad);
+  padding: var(--pad-t) var(--pad-r) var(--pad-b) var(--pad-l);
   margin: 0 auto 24px;
   background: #fff;
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.22);

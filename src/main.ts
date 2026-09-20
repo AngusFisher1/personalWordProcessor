@@ -1,18 +1,25 @@
 // styles.css is linked from index.html so the page geometry is applied
 // before this module runs: the first measurement must not happen unstyled.
 import type { Doc, MarginKey, StyleId } from './model';
-import { MARGINS, STYLE_IDS, emptyDoc, newBlock } from './model';
+import {
+  MARGINS,
+  STYLE_IDS,
+  emptyDoc,
+  marginPreset,
+  newBlock,
+  uniformMargins,
+} from './model';
 import { STYLES, injectStyleSheet } from './styles';
 import { docEl, readModel, renderAll } from './render';
 import {
   clearHeightCache,
-  currentMargin,
+  currentPageSetup,
   ensureTrailingBlock,
   normalize,
   pageCount,
   paginate,
   paginateIfNeeded,
-  setMargin,
+  setPageSetup,
 } from './paginate';
 import {
   bindShortcuts,
@@ -32,9 +39,14 @@ import {
   undo,
 } from './history';
 import { download, exportJson, importJson, load, save } from './persist';
+import type { Vault } from './docx-package';
+import { loadOriginal, saveOriginal } from './docx-package';
+import { importDocx } from './docx-import';
 
 let doc: Doc = emptyDoc();
 let saveFailed = false;
+/** The original .docx package, when this document came from one. */
+let vault: Vault | null = null;
 
 /* ------------------------------------------------------------------ *
  * Toolbar
@@ -147,8 +159,9 @@ function buildToolbar(bar: HTMLElement): void {
     margin.appendChild(o);
   }
   margin.addEventListener('change', () => {
-    doc.margin = margin.value as MarginKey;
-    setMargin(doc.margin);
+    // Only the margins change; an imported page size is left alone.
+    doc.page = { ...doc.page, margins: uniformMargins(MARGINS[margin.value as MarginKey]) };
+    setPageSetup(doc.page);
     reflowNow();
     scheduleSave();
   });
@@ -157,6 +170,11 @@ function buildToolbar(bar: HTMLElement): void {
 
   bar.appendChild(sep());
 
+  bar.appendChild(
+    button('Open .docx', 'Open a Word document', '', () => {
+      void pickDocx();
+    })
+  );
   bar.appendChild(
     button('Print / PDF', 'Print to PDF', '', () => {
       void printDocument();
@@ -289,8 +307,69 @@ async function printDocument(): Promise<void> {
 async function exportWord(): Promise<void> {
   syncModel();
   const { exportDocx } = await import('./export-docx');
-  const blob = await exportDocx(doc);
+  const blob = await exportDocx(doc, vault);
   download(safeName(doc.title) + '.docx', blob);
+  if (vault) showWarnings(vault);
+}
+
+/* ------------------------------------------------------------------ *
+ * .docx
+ * ------------------------------------------------------------------ */
+
+async function pickDocx(): Promise<void> {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept =
+    '.docx,application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    void openDocxFile(file);
+  });
+  input.click();
+}
+
+export async function openDocxFile(file: File): Promise<void> {
+  const bytes = await file.arrayBuffer();
+  try {
+    const { doc: imported, vault: v } = await importDocx(bytes, file.name);
+    vault = v;
+    openDoc(imported);
+    // Kept out of localStorage: too big, and only the bytes can rebuild the
+    // vault that makes the round trip faithful.
+    void saveOriginal(imported.id, bytes);
+    save(doc);
+    showWarnings(v);
+  } catch (err) {
+    alert('Could not open that file: ' + (err as Error).message);
+  }
+}
+
+/** A banner beats silent data loss: say what was preserved but not shown. */
+function showWarnings(v: Vault): void {
+  const host = document.getElementById('banner');
+  if (!host) return;
+  if (v.warnings.length === 0) {
+    host.hidden = true;
+    host.textContent = '';
+    return;
+  }
+  host.hidden = false;
+  host.textContent = '';
+  const text = document.createElement('span');
+  text.textContent =
+    'Kept but not shown: ' +
+    v.warnings
+      .map((w) => `${w.detail.toLowerCase()} (${w.count})`)
+      .join('; ') +
+    '. All of it is written back on export.';
+  host.appendChild(text);
+  const close = document.createElement('button');
+  close.textContent = 'Dismiss';
+  close.addEventListener('click', () => {
+    host.hidden = true;
+  });
+  host.appendChild(close);
 }
 
 async function pickJson(): Promise<void> {
@@ -304,6 +383,7 @@ async function pickJson(): Promise<void> {
     reader.onload = () => {
       try {
         doc = importJson(String(reader.result));
+        vault = null;
         openDoc(doc);
         snapshot('structural');
         save(doc);
@@ -322,8 +402,8 @@ async function pickJson(): Promise<void> {
 
 function openDoc(d: Doc): void {
   doc = d;
-  setMargin(d.margin);
-  if (ui.margin) ui.margin.value = d.margin;
+  setPageSetup(d.page);
+  if (ui.margin) ui.margin.value = marginPreset(d.page) ?? '';
   if (ui.title) ui.title.value = d.title;
   renderAll(doc, docEl());
   normalize();
@@ -331,6 +411,23 @@ function openDoc(d: Doc): void {
   paginate();
   resetHistory();
   updateToolbar();
+}
+
+/**
+ * Rebuild the preservation vault after a reload by re-parsing the original
+ * bytes. Imported block ids are derived from the body index, so the vault's
+ * keys still line up with the edited blocks that came back from localStorage.
+ */
+async function restoreVault(d: Doc): Promise<void> {
+  const bytes = await loadOriginal(d.id);
+  if (!bytes) return;
+  try {
+    const { vault: v } = await importDocx(bytes, d.title);
+    vault = v;
+    showWarnings(v);
+  } catch {
+    /* the original is unreadable; export will regenerate instead */
+  }
 }
 
 function sampleDoc(): Doc {
@@ -371,7 +468,9 @@ function boot(): void {
     /* not supported, not fatal */
   }
 
-  openDoc(load() ?? sampleDoc());
+  const restored = load();
+  openDoc(restored ?? sampleDoc());
+  if (restored) void restoreVault(restored);
 
   bindShortcuts(root);
   bindPaste(root);
@@ -405,6 +504,17 @@ function boot(): void {
     scheduleReflow();
   });
 
+  // Dropping a .docx onto the page opens it.
+  root.addEventListener('dragover', (e) => {
+    if (e.dataTransfer?.types.includes('Files')) e.preventDefault();
+  });
+  root.addEventListener('drop', (e) => {
+    const file = e.dataTransfer?.files?.[0];
+    if (!file || !/\.docx$/i.test(file.name)) return;
+    e.preventDefault();
+    void openDocxFile(file);
+  });
+
   window.addEventListener('beforeprint', () => {
     clearHeightCache();
     paginate();
@@ -429,6 +539,8 @@ Object.assign(window as unknown as Record<string, unknown>, {
     model: () => readModel(docEl()),
     pageCount,
     paginate,
-    margin: currentMargin,
+    page: currentPageSetup,
+    vault: () => vault,
+    openDocx: openDocxFile,
   },
 });

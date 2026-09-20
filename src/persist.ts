@@ -1,5 +1,5 @@
-import type { Block, Doc, MarginKey } from './model';
-import { MARGINS, isStyleId, newId } from './model';
+import type { Block, Doc, MarginKey, PageSetup } from './model';
+import { MARGINS, isStyleId, newId, pageSetup } from './model';
 
 const INDEX_KEY = 'wp:docs';
 const LAST_KEY = 'wp:last';
@@ -80,17 +80,35 @@ function coerce(raw: unknown): Doc {
     };
   });
 
-  const margin =
-    typeof o.margin === 'string' && o.margin in MARGINS
-      ? (o.margin as MarginKey)
-      : 'narrow';
-
   return {
     id: typeof o.id === 'string' && o.id ? o.id : newId(),
     title: typeof o.title === 'string' && o.title ? o.title : 'Untitled',
-    margin,
+    page: coercePage(o),
     blocks: blocks.length ? blocks : [{ id: newId(), styleId: 'Body', html: '' }],
   };
+}
+
+/** Accepts the current shape and the phase-1 `margin: 'narrow' | 'normal'`. */
+function coercePage(o: Record<string, unknown>): PageSetup {
+  const p = o.page as Partial<PageSetup> | undefined;
+  if (p && typeof p.width === 'number' && typeof p.height === 'number') {
+    const m = (p.margins ?? {}) as Partial<PageSetup['margins']>;
+    const num = (v: unknown, d: number) => (typeof v === 'number' ? v : d);
+    return {
+      width: p.width,
+      height: p.height,
+      margins: {
+        top: num(m.top, 48),
+        right: num(m.right, 48),
+        bottom: num(m.bottom, 48),
+        left: num(m.left, 48),
+      },
+    };
+  }
+  if (typeof o.margin === 'string' && o.margin in MARGINS) {
+    return pageSetup(o.margin as MarginKey);
+  }
+  return pageSetup('narrow');
 }
 
 export function download(filename: string, blob: Blob): void {

@@ -41,6 +41,8 @@ export function makeBlockEl(b: Block): HTMLElement {
   const el = document.createElement('div');
   el.className = 'blk ' + styleClass(b.styleId);
   el.dataset.blockId = b.id;
+  if (b.listMarker !== undefined) el.dataset.marker = b.listMarker;
+  if (b.listLevel) el.dataset.level = String(b.listLevel);
   setBlockHtml(el, b.html);
   return el;
 }
@@ -203,7 +205,15 @@ export function readModel(root: HTMLElement): Block[] {
       id = newId();
       g.head.dataset.blockId = id;
     }
-    return { id, styleId: styleOf(g.head), html: mergedHtml(g) };
+    const marker = g.head.dataset.marker;
+    const level = Number(g.head.dataset.level);
+    return {
+      id,
+      styleId: styleOf(g.head),
+      html: mergedHtml(g),
+      ...(marker !== undefined ? { listMarker: marker } : {}),
+      ...(Number.isFinite(level) && level > 0 ? { listLevel: level } : {}),
+    };
   });
 }
 

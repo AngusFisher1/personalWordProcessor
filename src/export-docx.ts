@@ -5,14 +5,18 @@ import {
   ExternalHyperlink,
   LevelFormat,
   Packer,
+  PageOrientation,
   Paragraph,
   TextRun,
   UnderlineType,
 } from 'docx';
 import type { IParagraphStyleOptions, ParagraphChild } from 'docx';
-import type { Block, Doc, MarginKey, StyleId } from './model';
-import { MARGINS, PAGE_H, PAGE_W, STYLE_IDS } from './model';
+import type { Block, Doc, Margins, StyleId } from './model';
+import { STYLE_IDS } from './model';
 import { DOCX_FONT, INK, RULE_COLOR, STYLES } from './styles';
+import type { Vault } from './docx-package';
+import { repack } from './docx-package';
+import { buildBody, parseInline, stripTags } from './docx-body';
 
 /**
  * The model maps almost directly: Block -> Paragraph, styleId -> a named
@@ -83,13 +87,12 @@ interface RunFlags {
 
 /** Walk the sanitized inline markup into runs. Never regex the HTML. */
 function runsFrom(html: string): ParagraphChild[] {
-  const parsed = new DOMParser().parseFromString(
-    '<div>' + html + '</div>',
-    'text/html'
-  );
-  const root = parsed.body.firstElementChild;
+  const root = parseInline(html);
   const out: ParagraphChild[] = [];
-  if (!root) return out;
+  if (!root) {
+    const text = stripTags(html);
+    return text ? [new TextRun({ text })] : out;
+  }
 
   let pendingBreak = false;
 
@@ -99,7 +102,7 @@ function runsFrom(html: string): ParagraphChild[] {
     href: string | null
   ): void => {
     for (const n of Array.from(node.childNodes)) {
-      if (n.nodeType === Node.TEXT_NODE) {
+      if (n.nodeType === 3) {
         const text = n.textContent ?? '';
         if (text === '') continue;
         const run = new TextRun({
@@ -116,9 +119,9 @@ function runsFrom(html: string): ParagraphChild[] {
         out.push(href ? new ExternalHyperlink({ children: [run], link: href }) : run);
         continue;
       }
-      if (n.nodeType !== Node.ELEMENT_NODE) continue;
-      const el = n as HTMLElement;
-      switch (el.tagName) {
+      if (n.nodeType !== 1) continue;
+      const el = n as Element;
+      switch (el.tagName.toUpperCase()) {
         case 'BR':
           pendingBreak = true;
           break;
@@ -160,12 +163,24 @@ function trimTrailingEmpty(blocks: Block[]): Block[] {
   return out;
 }
 
-function pageMargin(margin: MarginKey) {
-  const t = px(MARGINS[margin]);
-  return { top: t, right: t, bottom: t, left: t };
+function pageMargin(m: Margins) {
+  return { top: px(m.top), right: px(m.right), bottom: px(m.bottom), left: px(m.left) };
 }
 
-export async function exportDocx(doc: Doc): Promise<Blob> {
+/**
+ * A document that came from a .docx goes back into its own package: only the
+ * body of word/document.xml is rewritten and everything else is returned
+ * untouched. A document we created ourselves is generated from scratch, with
+ * the six named styles defined so it behaves like a real Word file.
+ */
+export async function exportDocx(doc: Doc, vault?: Vault | null): Promise<Blob> {
+  if (vault && vault.parts.size > 0) {
+    return repack(vault, buildBody(doc, vault));
+  }
+  return exportFresh(doc);
+}
+
+async function exportFresh(doc: Doc): Promise<Blob> {
   const file = new Document({
     creator: 'Personal Word Processor',
     title: doc.title,
@@ -204,8 +219,15 @@ export async function exportDocx(doc: Doc): Promise<Blob> {
       {
         properties: {
           page: {
-            size: { width: px(PAGE_W), height: px(PAGE_H) },
-            margin: pageMargin(doc.margin),
+            size: {
+              width: px(doc.page.width),
+              height: px(doc.page.height),
+              orientation:
+                doc.page.width > doc.page.height
+                  ? PageOrientation.LANDSCAPE
+                  : PageOrientation.PORTRAIT,
+            },
+            margin: pageMargin(doc.page.margins),
           },
         },
         children: trimTrailingEmpty(doc.blocks).map(toParagraph),

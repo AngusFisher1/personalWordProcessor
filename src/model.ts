@@ -10,14 +10,58 @@ export const MARGINS = {
 
 export type MarginKey = keyof typeof MARGINS;
 
+export interface Margins {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+/**
+ * Page geometry is per document, not a global constant: an imported .docx
+ * carries its own size and margins in w:sectPr, and a letter-only importer
+ * fails on the first legal-size or landscape document.
+ */
+export interface PageSetup {
+  width: number;
+  height: number;
+  margins: Margins;
+}
+
+export function uniformMargins(px: number): Margins {
+  return { top: px, right: px, bottom: px, left: px };
+}
+
+export function pageSetup(margin: MarginKey): PageSetup {
+  return {
+    width: PAGE_W,
+    height: PAGE_H,
+    margins: uniformMargins(MARGINS[margin]),
+  };
+}
+
 // content box, derived:
 //   narrow -> 720 x 960
 //   normal -> 624 x 864
-export function contentWidth(margin: MarginKey): number {
-  return PAGE_W - 2 * MARGINS[margin];
+export function contentWidth(p: PageSetup): number {
+  return p.width - p.margins.left - p.margins.right;
 }
-export function contentHeight(margin: MarginKey): number {
-  return PAGE_H - 2 * MARGINS[margin];
+export function contentHeight(p: PageSetup): number {
+  return p.height - p.margins.top - p.margins.bottom;
+}
+
+export function isLandscape(p: PageSetup): boolean {
+  return p.width > p.height;
+}
+
+/** Which preset, if the margins happen to match one. */
+export function marginPreset(p: PageSetup): MarginKey | null {
+  const m = p.margins;
+  if (m.top !== m.right || m.right !== m.bottom || m.bottom !== m.left) return null;
+  for (const k of Object.keys(MARGINS) as MarginKey[]) {
+    if (MARGINS[k] === m.top) return k;
+  }
+  return null;
 }
 
 export type StyleId =
@@ -56,12 +100,22 @@ export interface Block {
    * splitting exists.
    */
   continuesFrom?: string;
+
+  /**
+   * List marker text resolved from numbering.xml on import ("2.", "iv.", a
+   * bullet glyph). Held out of `html` so it never lands in the text the user
+   * edits, and ignored on .docx export, where the paragraph's own w:numPr
+   * makes Word renumber the list itself.
+   */
+  listMarker?: string;
+  /** Indent level of a list paragraph, 0-based. */
+  listLevel?: number;
 }
 
 export interface Doc {
   id: string;
   title: string;
-  margin: MarginKey;
+  page: PageSetup;
   blocks: Block[];
 }
 
@@ -84,7 +138,7 @@ export function emptyDoc(): Doc {
   return {
     id: newId(),
     title: 'Untitled',
-    margin: 'narrow',
+    page: pageSetup('narrow'),
     blocks: [newBlock('Body')],
   };
 }

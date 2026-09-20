@@ -220,6 +220,27 @@ function css(d: StyleDef): string {
  * These come last in the sheet so they beat the `.s-*` rules at equal
  * specificity.
  */
+/**
+ * An imported list paragraph carries its resolved marker in data-marker, so
+ * numbered clauses read as "1." rather than as bullets. Levels indent by
+ * 18px, on top of the hanging indent.
+ */
+const LIST_CSS =
+  '.blk[data-marker]::before {\n' +
+  '  content: attr(data-marker);\n' +
+  '  display: inline-block;\n' +
+  '  min-width: 14px;\n' +
+  '  padding-right: 4px;\n' +
+  '  text-indent: 0;\n' +
+  '}\n' +
+  '.blk.split-cont[data-marker]::before { content: none; }\n' +
+  [1, 2, 3, 4, 5, 6, 7, 8]
+    .map(
+      (n) =>
+        `.blk[data-level="${n}"] { padding-left: ${14 + n * 18}px; }\n`
+    )
+    .join('');
+
 const SPLIT_CSS =
   '.blk.split-cont { padding-top: 0; text-indent: 0; }\n' +
   '.blk.split-cont::before { content: none; }\n' +
@@ -234,6 +255,7 @@ export function injectStyleSheet(): void {
   el.textContent =
     `.blk { font-family: ${DOC_FONT}; color: ${INK}; }\n` +
     STYLE_IDS.map((s) => css(STYLES[s])).join('') +
+    LIST_CSS +
     SPLIT_CSS;
   document.head.appendChild(el);
 }

@@ -48,7 +48,10 @@ All geometry is in CSS pixels at 96px per inch, and the numbers are exact.
 | `paste.ts` | clipboard sanitizer and block mapping |
 | `persist.ts` | localStorage, JSON import/export |
 | `history.ts` | undo/redo stack |
-| `export-docx.ts` | .docx generation |
+| `export-docx.ts` | .docx generation, and the choice between the two paths |
+| `docx-import.ts` | OOXML to model: paragraphs, styles, numbering, sections |
+| `docx-package.ts` | the preservation vault: unzip, repack, keep the original |
+| `docx-body.ts` | model back to a document.xml body, for imported files |
 | `styles.css` | page geometry, print rules |
 
 A few decisions are load-bearing:
@@ -179,6 +182,91 @@ style dropdown, the Enter key and the .docx exporter.
 Pressing Enter at the end of a block creates the next style in that table;
 pressing it mid-block splits and both halves keep the current style, as in Word.
 Backspace at offset 0 merges into the previous block and adopts its style.
+
+## Opening a .docx
+
+**Open .docx** in the toolbar, or drop a file onto the page.
+
+The OOXML is parsed directly rather than converted through HTML. Libraries
+like mammoth produce HTML and throw away the style definitions, numbering and
+section properties that a faithful round trip needs.
+
+| Read from | For |
+|---|---|
+| `word/document.xml` | body content and section properties |
+| `word/styles.xml` | style names, mapped onto the six named styles |
+| `word/numbering.xml` | list definitions, resolved to real markers |
+| `word/_rels/document.xml.rels` | hyperlink targets |
+
+Sizes arrive in half-points (fonts) and twips (spacing and margins) and are
+converted in one place: 1px at 96dpi is 15 twips. Page size and margins come
+from `w:sectPr`, including landscape and non-letter paper - page geometry is
+per document, not a global constant.
+
+Numbered lists resolve to their real markers ("1.", "1.1", "(i)") rather than
+being flattened to bullets, so a contract with numbered clauses reads
+correctly. The marker is held in a `listMarker` field, out of the text the
+user edits, and ignored on export: the paragraph's own `w:numPr` goes back and
+Word renumbers the list itself.
+
+### The preservation vault
+
+The original package is kept in memory. On export only the body of
+`word/document.xml` is rewritten and dropped back into it. Everything we never
+understood - theme, fonts, custom XML, document properties, comments, headers,
+footnotes - goes back untouched.
+
+Within the body, a paragraph is only regenerated when its text or style
+actually changed. An untouched paragraph is written back verbatim, and an
+edited one keeps its original `w:pPr`, so indentation, spacing, numbering and
+direct formatting survive an edit to the words.
+
+The result is that importing and re-exporting a document without editing it
+produces a **byte-identical package**, and editing one paragraph changes only
+that paragraph.
+
+The original bytes also go into IndexedDB, because they are far too big for
+localStorage. Imported block ids are derived from the body index, so
+re-parsing the stored original after a reload rebuilds a vault whose keys
+still line up with the edited blocks restored from localStorage.
+
+### Preserved but not rendered
+
+Tables, content controls, tracked changes, images and anything else
+unrecognized are kept as verbatim XML, anchored to the paragraph they followed,
+and written back on export. They are not rendered or editable, and a banner
+says what was hidden - silent data loss is the thing to avoid.
+
+Two honest limits:
+
+- A link **added** in the editor exports as plain text. Writing it as a real
+  hyperlink means adding a relationship, and rewriting `document.xml.rels`
+  would break the guarantee that untouched parts come back identical. Links
+  that were already in the document survive editing.
+- If you delete the paragraph that preserved content was anchored to, that
+  content moves to the end of the document rather than being dropped.
+
+## Fidelity harness
+
+```bash
+npm run corpus          # write a seed corpus into test/corpus
+npm run test:roundtrip  # import, export and assert, over every file there
+```
+
+For each document it asserts that every part survives, that **non-document
+parts are byte-identical**, that text content and paragraph, table, numbering,
+hyperlink, content-control and revision counts all match, that an untouched
+document.xml comes back byte-identical, and that editing one paragraph leaves
+every other part untouched and rewrites only that paragraph.
+
+The byte-identity assertion is what enforces the vault. It fails loudly the
+first time someone regenerates the package from scratch, which is the point.
+
+The suite runs in plain Node against the same bundled code the browser uses,
+with `@xmldom/xmldom` standing in for the browser's parser.
+
+See `test/corpus/README.md`: the seed corpus is synthetic and is a floor, not
+the corpus. Real files belong there, and they stay gitignored.
 
 ## Printing to PDF
 

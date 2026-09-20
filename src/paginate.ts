@@ -1,5 +1,5 @@
-import type { Block, MarginKey } from './model';
-import { MARGINS, contentHeight, contentWidth, newId } from './model';
+import type { Block, PageSetup } from './model';
+import { contentHeight, contentWidth, newId, pageSetup } from './model';
 import { getCaret, setCaret } from './caret';
 import type { Group } from './render';
 import {
@@ -19,24 +19,31 @@ import { STYLES, styleClass, styleOf } from './styles';
  * Layout geometry
  * ------------------------------------------------------------------ */
 
-let margin: MarginKey = 'narrow';
+let page: PageSetup = pageSetup('narrow');
 
-export function setMargin(m: MarginKey): void {
-  margin = m;
-  document.documentElement.style.setProperty('--pad', MARGINS[m] + 'px');
+/** Apply a document's page geometry to the CSS variables the layout reads. */
+export function setPageSetup(p: PageSetup): void {
+  page = p;
+  const st = document.documentElement.style;
+  st.setProperty('--page-w', p.width + 'px');
+  st.setProperty('--page-h', p.height + 'px');
+  st.setProperty('--pad-t', p.margins.top + 'px');
+  st.setProperty('--pad-r', p.margins.right + 'px');
+  st.setProperty('--pad-b', p.margins.bottom + 'px');
+  st.setProperty('--pad-l', p.margins.left + 'px');
   clearHeightCache();
 }
 
-export function currentMargin(): MarginKey {
-  return margin;
+export function currentPageSetup(): PageSetup {
+  return page;
 }
 
 function limitH(): number {
-  return contentHeight(margin);
+  return contentHeight(page);
 }
 
 function limitW(): number {
-  return contentWidth(margin);
+  return contentWidth(page);
 }
 
 /** How far a keep-with-next run may cascade before we let it break. */

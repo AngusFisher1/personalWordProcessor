@@ -2,3 +2,7 @@ node_modules
 dist
 .DS_Store
 *.local
+test/build
+test/corpus/*
+!test/corpus/README.md
+test/baselines

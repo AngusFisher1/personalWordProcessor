@@ -10,7 +10,7 @@ import {
   uniformMargins,
 } from './model';
 import { DOC_FONT, STYLES, injectStyleSheet } from './styles';
-import { blocksIn, docEl, readModel, renderAll } from './render';
+import { blockEl, blocksIn, docEl, readModel, renderAll } from './render';
 import {
   clearHeightCache,
   currentPageSetup,
@@ -43,13 +43,20 @@ import { download, exportJson, importJson, load, save } from './persist';
 import type { Vault } from './docx-package';
 import { loadOriginal, saveOriginal } from './docx-package';
 import { importDocx } from './docx-import';
+import { closeMenu, iconButton, menuButton, textButton } from './ui';
+import { PALETTES, applyPalette, currentPaletteId } from './theme';
 import {
-  closeMenu,
-  iconButton,
-  menuButton,
-  separator,
-  textButton,
-} from './ui';
+  activeHeadingId,
+  buildRail,
+  caretReadout,
+  currentPageIndex,
+  railEl,
+  updateGutter,
+  updateOutline,
+  updateRail,
+  updateReadout,
+  updateSpine,
+} from './shell';
 
 let doc: Doc = emptyDoc();
 type SaveState = 'saved' | 'pending' | 'failed';
@@ -64,6 +71,7 @@ let vault: Vault | null = null;
 const ui = {
   style: null as ReturnType<typeof menuButton> | null,
   page: null as ReturnType<typeof menuButton> | null,
+  palette: null as ReturnType<typeof menuButton> | null,
   title: null as HTMLInputElement | null,
   bold: null as HTMLButtonElement | null,
   italic: null as HTMLButtonElement | null,
@@ -78,60 +86,24 @@ const IS_MAC = navigator.platform.toLowerCase().includes('mac');
 const MOD = IS_MAC ? '⌘' : 'Ctrl+';
 const SHIFT = IS_MAC ? '⇧' : 'Shift+';
 
-function row(cls: string): HTMLDivElement {
+function inlineGroup(...kids: HTMLElement[]): HTMLElement {
   const d = document.createElement('div');
-  d.className = 'tb-row ' + cls;
+  d.className = 'tb-inline';
+  d.append(...kids);
   return d;
 }
 
-function spacer(): HTMLSpanElement {
-  const s = document.createElement('span');
-  s.className = 'tb-spacer';
-  return s;
-}
+/**
+ * Controls live in the rail, never over the paper. The order is the order
+ * they are reached for: what the file is, then undo, then what the text is.
+ */
+function buildToolbar(host: HTMLElement): void {
+  host.textContent = '';
 
-/** Grow the title field with its text instead of sitting in a fixed box. */
-function sizeTitle(input: HTMLInputElement): void {
-  const chars = Math.max(8, (input.value || 'Untitled').length);
-  input.style.width = Math.min(440, chars * 8.2 + 26) + 'px';
-}
-
-function buildToolbar(bar: HTMLElement): void {
-  bar.textContent = '';
-  const docRow = row('tb-doc');
-  const fmtRow = row('tb-format');
-  bar.append(docRow, fmtRow);
-
-  /* ---- document row: what the file is, and whether it is safe ---- */
-
-  const title = document.createElement('input');
-  title.type = 'text';
-  title.id = 'doctitle';
-  title.value = doc.title;
-  title.title = 'Document name';
-  title.setAttribute('aria-label', 'Document name');
-  title.addEventListener('input', () => {
-    doc.title = title.value || 'Untitled';
-    sizeTitle(title);
-    scheduleSave();
-  });
-  ui.title = title;
-  docRow.appendChild(title);
-  sizeTitle(title);
-
-  const saveState = document.createElement('span');
+  const saveState = document.createElement('div');
   saveState.className = 'tb-save';
   ui.save = saveState;
-  docRow.appendChild(saveState);
-
-  docRow.appendChild(spacer());
-
-  const counts = document.createElement('span');
-  counts.className = 'tb-counts';
-  ui.counts = counts;
-  docRow.appendChild(counts);
-
-  /* ---- format row ---- */
+  host.appendChild(saveState);
 
   const file = menuButton('File', 'Open, save and export', () => [
     { label: 'Open Word document…', onSelect: () => void pickDocx() },
@@ -152,9 +124,7 @@ function buildToolbar(bar: HTMLElement): void {
     },
     { label: 'Import JSON…', onSelect: () => void pickJson() },
   ]);
-  fmtRow.appendChild(file.el);
-
-  fmtRow.appendChild(separator());
+  host.appendChild(file.el);
 
   ui.undo = iconButton('undo', `Undo (${MOD}Z)`, () => {
     undo();
@@ -164,9 +134,7 @@ function buildToolbar(bar: HTMLElement): void {
     redo();
     afterChange();
   });
-  fmtRow.append(ui.undo, ui.redo);
-
-  fmtRow.appendChild(separator());
+  host.appendChild(inlineGroup(ui.undo, ui.redo));
 
   // Each entry previews itself in its own style, so the list shows what the
   // styles look like rather than only what they are called.
@@ -182,7 +150,7 @@ function buildToolbar(bar: HTMLElement): void {
           checked: id === current,
           preview: {
             fontFamily: DOC_FONT,
-            fontSize: Math.min(20, Math.max(12, d.size)) + 'px',
+            fontSize: Math.min(19, Math.max(12, d.size * 1.2)) + 'px',
             fontWeight: d.bold ? '700' : '400',
             textTransform: d.uppercase ? 'uppercase' : 'none',
             letterSpacing: d.letterSpacing ? d.letterSpacing + 'px' : 'normal',
@@ -193,9 +161,7 @@ function buildToolbar(bar: HTMLElement): void {
     },
     'tb-style'
   );
-  fmtRow.appendChild(ui.style.el);
-
-  fmtRow.appendChild(separator());
+  host.appendChild(ui.style.el);
 
   ui.bold = textButton('B', `Bold (${MOD}B)`, () => toggleInline('bold'), 'tb-b');
   ui.italic = textButton('I', `Italic (${MOD}I)`, () => toggleInline('italic'), 'tb-i');
@@ -205,9 +171,7 @@ function buildToolbar(bar: HTMLElement): void {
     () => toggleInline('underline'),
     'tb-u'
   );
-  fmtRow.append(ui.bold, ui.italic, ui.underline);
-
-  fmtRow.appendChild(separator());
+  host.appendChild(inlineGroup(ui.bold, ui.italic, ui.underline));
 
   ui.page = menuButton('Margins', 'Page margins', () => {
     const preset = marginPreset(doc.page);
@@ -220,15 +184,59 @@ function buildToolbar(bar: HTMLElement): void {
       })),
     ];
   });
-  fmtRow.appendChild(ui.page.el);
+  host.appendChild(ui.page.el);
 
-  fmtRow.appendChild(separator());
+  // The palettes, each swatched in its own accent.
+  ui.palette = menuButton('Palette', 'Workspace palette', () => {
+    const now = currentPaletteId();
+    const rows = [];
+    let lastDark: boolean | null = null;
+    for (const p of PALETTES) {
+      if (p.dark !== lastDark) {
+        rows.push({ heading: p.dark ? 'Dark' : 'Light' });
+        lastDark = p.dark;
+      }
+      rows.push({
+        label: p.label,
+        note: p.note,
+        swatch: p.acc,
+        swatchBg: p.bg,
+        checked: p.id === now,
+        onSelect: () => setPalette(p.id),
+      });
+    }
+    return rows;
+  });
+  host.appendChild(ui.palette.el);
 
-  fmtRow.appendChild(
+  host.appendChild(
     textButton('Print', `Print or save as PDF (${MOD}P)`, () => void printDocument())
   );
+}
 
-  fmtRow.appendChild(spacer());
+/** The document name, editable in place at the top of the rail. */
+function mountTitle(): void {
+  const host = document.querySelector('.rail-title');
+  if (!host) return;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'rail-title';
+  input.value = doc.title;
+  input.setAttribute('aria-label', 'Document name');
+  input.addEventListener('input', () => {
+    doc.title = input.value || 'Untitled';
+    scheduleSave();
+  });
+  host.replaceWith(input);
+  ui.title = input;
+}
+
+function setPalette(id: string): void {
+  const p = applyPalette(id);
+  ui.palette?.setLabel(p.label);
+  // Page shadows and rules changed, but nothing about the text did, so no
+  // reflow is needed - only the chrome that depends on the accent.
+  refreshChrome();
 }
 
 function setMarginPreset(key: MarginKey): void {
@@ -271,37 +279,61 @@ function updateToolbar(): void {
     ui.save.classList.toggle('err', saveState === 'failed');
     ui.save.textContent =
       saveState === 'failed'
-        ? 'Not saved — storage full. Export to keep your work.'
+        ? 'NOT SAVED — STORAGE FULL'
         : saveState === 'pending'
-          ? 'Saving…'
-          : 'All changes saved';
+          ? 'SAVING…'
+          : 'SAVED';
   }
 
   updateCounts();
+  refreshChrome();
+}
+
+/**
+ * The rail, gutter, spine and readout all describe where the caret is, so
+ * they are refreshed together whenever anything moves.
+ */
+function refreshChrome(): void {
+  const page = currentPageIndex();
+  updateGutter(page);
+  updateSpine(page);
+  updateReadout(caretReadout(lastWords < 0 ? 0 : lastWords));
+  updateRail(
+    doc,
+    lastWords < 0 ? 0 : lastWords,
+    saveState === 'failed'
+      ? 'NOT SAVED'
+      : saveState === 'pending'
+        ? 'SAVING'
+        : 'SAVED'
+  );
+  scheduleOutline();
+}
+
+let outlineTimer = 0;
+/** The outline reads the whole model, so it follows the text rather than
+ *  every keystroke. */
+function scheduleOutline(): void {
+  clearTimeout(outlineTimer);
+  outlineTimer = window.setTimeout(() => {
+    syncModel();
+    updateOutline(doc, activeHeadingId(doc));
+  }, 350);
 }
 
 let countsTimer = 0;
-/**
- * Page count is free, but the word count reads the whole document, so it is
- * debounced rather than run on every keystroke.
- */
+let lastWords = -1;
+/** The word count reads the whole document, so it is debounced. */
 function updateCounts(): void {
-  if (!ui.counts) return;
-  const pages = pageCount();
-  const pageText = `${pages} page${pages === 1 ? '' : 's'}`;
-  ui.counts.textContent = pageText + (lastWords >= 0 ? ` · ${lastWords} words` : '');
   clearTimeout(countsTimer);
   countsTimer = window.setTimeout(() => {
     const words = (docEl().textContent ?? '').match(/\S+/g)?.length ?? 0;
     if (words !== lastWords) {
       lastWords = words;
-      if (ui.counts) {
-        ui.counts.textContent = `${pageCount()} page${pageCount() === 1 ? '' : 's'} · ${words} words`;
-      }
+      refreshChrome();
     }
   }, 400);
 }
-let lastWords = -1;
 
 let saveTimer = 0;
 function scheduleSave(): void {
@@ -455,10 +487,7 @@ async function pickJson(): Promise<void> {
 function openDoc(d: Doc): void {
   doc = d;
   setPageSetup(d.page);
-  if (ui.title) {
-    ui.title.value = d.title;
-    sizeTitle(ui.title);
-  }
+  if (ui.title) ui.title.value = d.title;
   lastWords = -1;
   renderAll(doc, docEl());
   normalize();
@@ -518,9 +547,21 @@ function sampleDoc(): Doc {
 function boot(): void {
   injectStyleSheet();
   const root = docEl();
-  const bar = document.getElementById('toolbar');
-  if (!bar) throw new Error('#toolbar missing');
 
+  applyPalette(currentPaletteId());
+  buildRail(railEl(), {
+    onOutlineClick: (blockId) => {
+      const target = blockEl(blockId);
+      if (!target) return;
+      target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      root.focus();
+      caretAtStart(target);
+      updateToolbar();
+    },
+  });
+  mountTitle();
+  const bar = document.getElementById('rail-actions');
+  if (!bar) throw new Error('#rail-actions missing');
   buildToolbar(bar);
 
   // Keep execCommand emitting <b>/<i>/<u> rather than styled spans.
@@ -550,6 +591,15 @@ function boot(): void {
   document.addEventListener('selectionchange', () => {
     if (document.activeElement === root) updateToolbar();
   });
+
+  // The gutter and the document map are positioned against the canvas, so
+  // they follow the scroll rather than being redrawn by the editor.
+  root.addEventListener('scroll', () => {
+    const page = currentPageIndex();
+    updateGutter(page);
+    updateSpine(page);
+  });
+  window.addEventListener('resize', () => refreshChrome());
 
   document.addEventListener('wp:changed', () => {
     updateToolbar();

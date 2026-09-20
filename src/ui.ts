@@ -18,6 +18,11 @@ export interface MenuItem {
   heading?: string;
   /** Inline styles for the label, used to preview a paragraph style. */
   preview?: Partial<CSSStyleDeclaration>;
+  /** A colour chip, used by the palette picker. */
+  swatch?: string;
+  swatchBg?: string;
+  /** Dimmer trailing text on the same row. */
+  note?: string;
   onSelect?: () => void;
 }
 
@@ -112,11 +117,26 @@ function openPanel(anchor: HTMLElement, items: MenuItem[]): void {
     tick.textContent = it.checked ? '✓' : '';
     row.appendChild(tick);
 
+    if (it.swatch) {
+      const chip = document.createElement('span');
+      chip.className = 'menu-swatch';
+      chip.style.background = it.swatchBg ?? it.swatch;
+      chip.style.boxShadow = 'inset 0 0 0 3px ' + it.swatch;
+      row.appendChild(chip);
+    }
+
     const label = document.createElement('span');
     label.className = 'menu-label';
     label.textContent = it.label ?? '';
     if (it.preview) Object.assign(label.style, it.preview);
     row.appendChild(label);
+
+    if (it.note) {
+      const note = document.createElement('span');
+      note.className = 'menu-note';
+      note.textContent = it.note;
+      row.appendChild(note);
+    }
 
     if (it.hint) {
       const hint = document.createElement('span');
@@ -134,11 +154,19 @@ function openPanel(anchor: HTMLElement, items: MenuItem[]): void {
 
   document.body.appendChild(panel);
 
-  // Positioned after insertion so the measured width can keep it on screen.
+  // Positioned after insertion so the measured size can keep it on screen.
+  // Controls in the rail sit near the bottom of the window, so a menu that
+  // only ever opens downwards is a menu you cannot read.
   const r = anchor.getBoundingClientRect();
   const w = panel.offsetWidth;
-  panel.style.left = Math.max(8, Math.min(r.left, window.innerWidth - w - 8)) + 'px';
-  panel.style.top = r.bottom + 4 + 'px';
+  const h = panel.offsetHeight;
+  const margin = 8;
+  panel.style.left =
+    Math.max(margin, Math.min(r.left, window.innerWidth - w - margin)) + 'px';
+  const below = r.bottom + 4;
+  const fitsBelow = below + h <= window.innerHeight - margin;
+  panel.style.top =
+    (fitsBelow ? below : Math.max(margin, r.top - 4 - h)) + 'px';
   anchor.classList.add('open');
 
   const close = () => {

@@ -26,11 +26,13 @@ import { buildBody, parseInline, stripTags } from './docx-body';
  * forcing our breaks in would fight it.
  */
 
-/** 1px at 96dpi = 15 twips. */
+/** 1px at 96dpi = 15 twips; 1pt = 20 twips. */
 const TWIP_PER_PX = 15;
 const px = (n: number) => Math.round(n * TWIP_PER_PX);
-/** px -> half-points (px * 72/96 * 2), rounded to a size Word can store. */
-const halfPt = (n: number) => Math.round(n * 1.5);
+/** The style table is already in points, so this is just doubling. */
+const halfPt = (pt: number) => Math.round(pt * 2);
+/** Points to twips, for the spacing values in the style table. */
+const ptTwip = (pt: number) => Math.round(pt * 20);
 
 const BULLET_REF = 'wp-bullets';
 
@@ -50,13 +52,13 @@ function paragraphStyle(id: StyleId): IParagraphStyleOptions {
       allCaps: d.uppercase,
       color: INK.replace('#', ''),
       ...(d.letterSpacing
-        ? { characterSpacing: Math.round(d.letterSpacing * 0.75 * 20) }
+        ? { characterSpacing: Math.round(d.letterSpacing * 20) }
         : {}),
     },
     paragraph: {
       spacing: {
-        before: px(top),
-        after: px(bottom),
+        before: ptTwip(top),
+        after: ptTwip(bottom),
         line: Math.round(240 * d.lineHeight),
         lineRule: 'auto' as const,
       },
@@ -73,7 +75,7 @@ function paragraphStyle(id: StyleId): IParagraphStyleOptions {
           }
         : {}),
       ...(d.hanging
-        ? { indent: { left: px(d.hanging), hanging: px(d.hanging) } }
+        ? { indent: { left: ptTwip(d.hanging), hanging: ptTwip(d.hanging) } }
         : {}),
     },
   };
@@ -217,8 +219,8 @@ async function exportFresh(doc: Doc): Promise<Blob> {
               style: {
                 paragraph: {
                   indent: {
-                    left: px(STYLES.Bullet.hanging),
-                    hanging: px(STYLES.Bullet.hanging),
+                    left: ptTwip(STYLES.Bullet.hanging),
+                    hanging: ptTwip(STYLES.Bullet.hanging),
                   },
                 },
               },

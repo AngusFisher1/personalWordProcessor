@@ -1,4 +1,4 @@
-# Paged web word processor
+# Recto — a paged word processor
 
 A browser-based word processor that renders documents as fixed-size US Letter
 pages, the way Word and Google Docs do. Text flows from page to page as you
@@ -22,29 +22,60 @@ lazily and only when you export). No framework: React's virtual DOM fights the
 direct node manipulation that is the core of this app. No rich-text library —
 writing the pagination layer is the point of the project.
 
-## The toolbar
+## The workspace
 
-Two rows. The top one is about the file - its name, whether it is saved, and
-how big it is. The bottom one is about the text.
+The workspace is a darkroom. The only light in it is the page.
 
-File operations live in a **File** menu rather than as five sibling buttons,
-because "Open .docx", ".docx", "Export JSON" and "Import JSON" sitting side by
-side reads as four unrelated things when two of them are a matched pair. The
-paragraph style menu previews each style **in that style**, so the list shows
-what the styles look like rather than only what they are called.
+**Chrome never crosses the paper edge.** Everything floats in the gutter or
+sits in the rail, so the page is the only thing in the room that looks like a
+document. Page numbers, the page-break rules and the document map are drawn as
+an overlay on the canvas rather than inside the pages, which also means none
+of them can end up in the printed output.
+
+The 248px rail holds what the file is (name, page and word count, save state),
+an outline built from the document's own headings, the page setup, and the
+controls. The gutter carries page numbers with a short leader line and a
+labelled rule at each break. The right-hand spine is a document map: one bar
+per page, with the visible slice marked in the accent. The status readout sits
+bottom-left in the gutter.
 
 Every control calls `preventDefault` on mousedown and never takes focus. A
-toolbar that takes focus destroys the document selection, and then Bold has
-nothing to apply itself to. Doing this consistently is what let the earlier
-save-the-selection-and-put-it-back-afterwards workaround be deleted: with
-custom menus instead of a native `<select>`, the caret simply never moves.
+control that takes focus destroys the document selection, and then Bold has
+nothing to apply itself to.
 
-The bar does not reflow onto a second row as the window narrows. The document
-name and save message give up space first; Print is the only control that can
-be pushed out of sight, and it is also in the File menu, so nothing becomes
-unreachable.
+### Palettes
 
-## Geometry
+Twelve, seven dark and five light, each defined as ten tokens - `bg`, `rail`,
+`panel`, `line`, `dim`, `mid`, `hi`, `acc`, `accfg` and a retuned page shadow.
+A palette is therefore a data change rather than a stylesheet fork, and the
+page itself stays white in all of them, because it is paper.
+
+| Dark | Light |
+|---|---|
+| Night — amber on near-black | Daylight — burnt orange on warm grey |
+| Oxide — iron red on warm black | Moss on stone — sage on warm light grey |
+| Cobalt — signal blue on neutral black | Moss on chalk — sage on cool light grey |
+| Sulphur — brass on olive black | Bone — ink blue on parchment |
+| Moss — sage on green black | Chalk — oxblood on cool grey |
+| Plum — dusty rose on violet black | |
+| Noir — white on pure black | |
+
+The choice is remembered in `localStorage`.
+
+### One deliberate departure from the specification
+
+The Recto spec sets the page at **72px to the inch**, so that eleven-point
+text is eleven pixels on screen. A CSS pixel is defined as 1/96in, so a page
+rendered 612px wide prints 6.375 inches wide - which would break the one
+property this whole program exists to provide, that print matches paper.
+
+The page therefore stays at 96dpi, 816 × 1056. The spec's real intent is met a
+different way: the style table now holds **points**, the unit print actually
+uses, and converts once on the way to CSS. Eleven-point body text is eleven
+points on paper and 14.67px on screen. Previously it was 11px, which was
+8.25pt - a third too small in every exported document.
+
+## Geometry## Geometry
 
 All geometry is in CSS pixels at 96px per inch, and the numbers are exact.
 
@@ -61,7 +92,9 @@ All geometry is in CSS pixels at 96px per inch, and the numbers are exact.
 | File | Role |
 |---|---|
 | `main.ts` | entry, toolbar composition, event wiring, autosave |
-| `ui.ts` | toolbar widgets: buttons and dropdown menus |
+| `ui.ts` | control widgets: buttons and dropdown menus |
+| `theme.ts` | the twelve palettes, as ten tokens each |
+| `shell.ts` | the workspace chrome: rail, gutter, document map, readout |
 | `model.ts` | `Block`, `Doc`, geometry constants, id generation |
 | `styles.ts` | the six named styles; emitted as `.s-<StyleId>` CSS at startup |
 | `render.ts` | model → DOM, DOM → model, the inline sanitizer |

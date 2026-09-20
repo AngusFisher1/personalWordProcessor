@@ -12,18 +12,18 @@ export interface StyleDef {
   label: string;
   /** Style of the block created when Enter is pressed at the end of this one. */
   enterTo: StyleId;
-  /** px */
+  /** Points. The document is specified in points, as print is. */
   size: number;
   bold: boolean;
   uppercase: boolean;
   /** px */
   letterSpacing: number;
   lineHeight: number;
-  /** px, [top, right, bottom, left]. Spacing is padding only - never margin. */
+  /** Points, [top, right, bottom, left]. Padding only - never margin. */
   padding: [number, number, number, number];
   /** Bottom rule, as on SectionHeading. */
   rule: boolean;
-  /** px hanging indent; 0 for none. */
+  /** Hanging indent in points; 0 for none. */
   hanging: number;
   bullet: boolean;
 
@@ -55,12 +55,21 @@ const PARAGRAPH_DEFAULTS: ParagraphProps = {
   pageBreakBefore: false,
 } as const;
 
-// Deliberately not a web font: a local stack means there is no font-load race
-// to correct pagination for, and print matches screen on the first paint.
-export const DOC_FONT =
-  'Calibri, Carlito, "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif';
-/** Font name written into the .docx. Matches the head of DOC_FONT. */
-export const DOCX_FONT = 'Calibri';
+/**
+ * A point is 1/72in and a CSS pixel is 1/96in, so the document's sizes are
+ * held in points - the unit print actually uses - and converted once, here.
+ */
+export const PT = 96 / 72;
+export const px = (pt: number) => Math.round(pt * PT * 100) / 100;
+
+/**
+ * The document is set in a serif, per the Recto specification. Georgia is the
+ * fallback because it is on every machine, so a font that has not arrived
+ * yet never leaves the page unmeasurable.
+ */
+export const DOC_FONT = '"Source Serif 4", "Source Serif Pro", Georgia, Cambria, serif';
+/** Font name written into the .docx. */
+export const DOCX_FONT = 'Source Serif 4';
 export const INK = '#111111';
 export const RULE_COLOR = '#999999';
 
@@ -129,7 +138,7 @@ const BASE: Record<StyleId, Omit<StyleDef, keyof ParagraphProps>> = {
     bold: false,
     uppercase: false,
     letterSpacing: 0,
-    lineHeight: 1.35,
+    lineHeight: 16 / 11, // Source Serif 11/16, per the specification
     padding: [0, 0, 4, 0],
     rule: false,
     hanging: 0,
@@ -143,10 +152,10 @@ const BASE: Record<StyleId, Omit<StyleDef, keyof ParagraphProps>> = {
     bold: false,
     uppercase: false,
     letterSpacing: 0,
-    lineHeight: 1.35,
+    lineHeight: 16 / 11,
     padding: [0, 0, 2, 0],
     rule: false,
-    hanging: 14,
+    hanging: 12,
     bullet: true,
   },
 };
@@ -188,15 +197,17 @@ export function styleOf(el: Element): StyleId {
 function css(d: StyleDef): string {
   const [t, r, b, l] = d.padding;
   const lines: string[] = [];
-  lines.push(`  font-size: ${d.size}px;`);
+  lines.push(`  font-size: ${px(d.size)}px;`);
   lines.push(`  font-weight: ${d.bold ? 700 : 400};`);
   lines.push(`  line-height: ${d.lineHeight};`);
   if (d.uppercase) lines.push('  text-transform: uppercase;');
-  if (d.letterSpacing) lines.push(`  letter-spacing: ${d.letterSpacing}px;`);
+  if (d.letterSpacing) lines.push(`  letter-spacing: ${px(d.letterSpacing)}px;`);
   // Spacing via padding only. Sibling margins collapse, and summed heights
   // would then disagree with the container height.
-  lines.push(`  padding: ${t}px ${r}px ${b}px ${l + d.hanging}px;`);
-  if (d.hanging) lines.push(`  text-indent: -${d.hanging}px;`);
+  lines.push(
+    `  padding: ${px(t)}px ${px(r)}px ${px(b)}px ${px(l + d.hanging)}px;`
+  );
+  if (d.hanging) lines.push(`  text-indent: -${px(d.hanging)}px;`);
   if (d.rule) lines.push(`  border-bottom: 1px solid ${RULE_COLOR};`);
   let out = `.blk.${styleClass(d.id)} {\n${lines.join('\n')}\n}\n`;
   if (d.bullet) {

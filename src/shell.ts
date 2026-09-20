@@ -3,6 +3,8 @@ import { contentHeight, contentWidth, isTable } from './model';
 import { docEl, pages } from './render';
 import { styleOf } from './styles';
 import { currentPageSetup, pageCount } from './paginate';
+import type { IndexEntry } from './persist';
+import { openMenuAt } from './ui';
 
 /**
  * The Recto workspace chrome.
@@ -15,6 +17,10 @@ import { currentPageSetup, pageCount } from './paginate';
 
 const ui = {
   outline: null as HTMLElement | null,
+  files: null as HTMLElement | null,
+  fileList: null as HTMLElement | null,
+  filter: null as HTMLInputElement | null,
+  tabs: null as HTMLElement | null,
   spine: null as HTMLElement | null,
   readout: null as HTMLElement | null,
   title: null as HTMLElement | null,
@@ -48,7 +54,14 @@ export function canvasEl(): HTMLElement {
 
 export interface RailHooks {
   onOutlineClick(blockId: string): void;
+  onOpenDoc(id: string): void;
+  onNewDoc(): void;
+  onDuplicateDoc(id: string): void;
+  onDeleteDoc(id: string): void;
 }
+
+export type RailTab = 'outline' | 'files';
+let activeTab: RailTab = 'outline';
 
 let hooks: RailHooks | null = null;
 
@@ -77,14 +90,170 @@ export function buildRail(rail: HTMLElement, h: RailHooks): void {
   rail.appendChild(actions);
 
   const tabs = el('div', 'rail-tabs');
-  tabs.append(el('div', 'rail-tab on', 'OUTLINE'));
+  for (const [id, label] of [
+    ['outline', 'OUTLINE'],
+    ['files', 'FILES'],
+  ] as [RailTab, string][]) {
+    const t = el('div', 'rail-tab', label);
+    t.dataset.tab = id;
+    t.addEventListener('mousedown', (e) => e.preventDefault());
+    t.addEventListener('click', () => setRailTab(id));
+    tabs.appendChild(t);
+  }
+  ui.tabs = tabs;
   rail.appendChild(tabs);
 
   ui.outline = el('div', 'rail-outline');
   rail.appendChild(ui.outline);
 
+  ui.files = el('div', 'rail-files');
+  const filter = document.createElement('input');
+  filter.type = 'text';
+  filter.className = 'files-filter';
+  filter.placeholder = 'Filter…';
+  filter.spellcheck = false;
+  filter.addEventListener('input', () => renderFiles());
+  ui.filter = filter;
+  ui.files.appendChild(filter);
+
+  ui.fileList = el('div', 'files-list');
+  ui.files.appendChild(ui.fileList);
+
+  const foot = el('div', 'files-foot');
+  foot.id = 'files-foot';
+  ui.files.appendChild(foot);
+
+  rail.appendChild(ui.files);
+
   ui.setup = el('div', 'rail-setup');
   rail.appendChild(ui.setup);
+
+  setRailTab('outline');
+}
+
+export function setRailTab(tab: RailTab): void {
+  activeTab = tab;
+  for (const t of Array.from(ui.tabs?.children ?? [])) {
+    (t as HTMLElement).classList.toggle(
+      'on',
+      (t as HTMLElement).dataset.tab === tab
+    );
+  }
+  if (ui.outline) ui.outline.hidden = tab !== 'outline';
+  if (ui.files) ui.files.hidden = tab !== 'files';
+  if (tab === 'files') {
+    renderFiles();
+    ui.filter?.focus();
+  }
+}
+
+export function currentRailTab(): RailTab {
+  return activeTab;
+}
+
+/* ------------------------------------------------------------------ *
+ * Files
+ * ------------------------------------------------------------------ */
+
+let library: IndexEntry[] = [];
+let currentDocId = '';
+let libraryBytes = 0;
+
+export function setLibrary(
+  entries: IndexEntry[],
+  currentId: string,
+  bytes: number
+): void {
+  library = entries;
+  currentDocId = currentId;
+  libraryBytes = bytes;
+  if (activeTab === 'files') renderFiles();
+}
+
+function ago(ts: number): string {
+  const s = Math.max(0, Date.now() - ts) / 1000;
+  if (s < 90) return 'JUST NOW';
+  const m = s / 60;
+  if (m < 60) return Math.round(m) + ' MIN AGO';
+  const h = m / 60;
+  if (h < 24) return Math.round(h) + ' HR AGO';
+  const d = h / 24;
+  if (d < 7) return Math.round(d) + ' DAYS AGO';
+  return new Date(ts)
+    .toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
+    .toUpperCase();
+}
+
+function renderFiles(): void {
+  const list = ui.fileList;
+  if (!list) return;
+  const q = (ui.filter?.value ?? '').trim().toLowerCase();
+  const shown = q
+    ? library.filter((e) => e.title.toLowerCase().includes(q))
+    : library;
+
+  list.textContent = '';
+
+  if (shown.length === 0) {
+    const empty = el('div', 'outline-empty');
+    empty.textContent = q ? 'NO MATCHES' : 'NO DOCUMENTS YET';
+    list.appendChild(empty);
+  }
+
+  shown.forEach((e, i) => {
+    const row = el('div', 'file-row');
+    if (e.id === currentDocId) row.classList.add('on');
+    // Recency fade: the further down the list, the quieter the entry.
+    row.style.opacity = String(Math.max(0.5, 1 - i * 0.05));
+
+    const tick = el('span', 'outline-tick');
+    const body = el('div', 'file-body');
+    body.append(
+      el('div', 'file-title', e.title || 'Untitled'),
+      el(
+        'div',
+        'file-meta',
+        `${e.pages} PP · ${e.words} W · ${ago(e.updatedAt)}`
+      )
+    );
+
+    const more = document.createElement('button');
+    more.className = 'file-more';
+    more.textContent = '⋯';
+    more.title = 'Document actions';
+    more.addEventListener('mousedown', (ev) => ev.preventDefault());
+    more.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      openMenuAt(more, [
+        { label: 'Open', onSelect: () => hooks?.onOpenDoc(e.id) },
+        { label: 'Duplicate', onSelect: () => hooks?.onDuplicateDoc(e.id) },
+        { separator: true },
+        { label: 'Delete…', onSelect: () => hooks?.onDeleteDoc(e.id) },
+      ]);
+    });
+
+    row.append(tick, body, more);
+    row.addEventListener('mousedown', (ev) => ev.preventDefault());
+    row.addEventListener('click', () => {
+      if (e.id !== currentDocId) hooks?.onOpenDoc(e.id);
+    });
+    list.appendChild(row);
+  });
+
+  const foot = document.getElementById('files-foot');
+  if (foot) {
+    const kb = Math.max(1, Math.round(libraryBytes / 1024));
+    foot.textContent = '';
+    foot.appendChild(el('div', 'rail-label', 'ON DISK'));
+    foot.appendChild(
+      el(
+        'div',
+        'files-foot-line',
+        `${library.length} DOCUMENT${library.length === 1 ? '' : 'S'} · ${kb} KB`
+      )
+    );
+    foot.appendChild(el('div', 'files-foot-line', 'NO ACCOUNT · NO SYNC'));
+  }
 }
 
 /** A row of key/value metadata, as used by PAGE SETUP. */

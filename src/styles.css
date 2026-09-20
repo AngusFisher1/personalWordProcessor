@@ -158,6 +158,105 @@ html, body {
 .outline-row.sub.on { color: var(--acc); }
 .outline-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ---------- files ---------- */
+
+.rail-files {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.rail-files[hidden] { display: none; }
+.rail-outline[hidden] { display: none; }
+
+.files-filter {
+  flex: none;
+  margin: 10px 16px 8px;
+  padding: 5px 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  color: var(--hi);
+  font: 11px var(--ui);
+}
+.files-filter::placeholder { color: var(--dim); }
+.files-filter:focus { outline: none; border-color: var(--acc); }
+
+.files-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 8px;
+}
+
+/* The rail's own scrollbars, so a long library does not put a system-grey
+   bar down the middle of the darkroom. */
+.files-list, .rail-outline {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.files-list::-webkit-scrollbar,
+.rail-outline::-webkit-scrollbar { width: 8px; }
+.files-list::-webkit-scrollbar-thumb,
+.rail-outline::-webkit-scrollbar-thumb { background: var(--line); }
+.files-list::-webkit-scrollbar-track,
+.rail-outline::-webkit-scrollbar-track { background: transparent; }
+
+.file-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 6px 10px 6px 16px;
+  cursor: pointer;
+}
+.file-row:hover { background: var(--panel); }
+.file-row.on .outline-tick { background: var(--acc); }
+.file-row.on .file-title { color: var(--hi); }
+.file-body { flex: 1; min-width: 0; }
+.file-title {
+  font-size: 11.5px;
+  color: var(--mid);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-meta {
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 8px;
+  letter-spacing: 0.12em;
+  color: var(--dim);
+}
+.file-more {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0;
+}
+.file-row:hover .file-more { opacity: 1; }
+.file-more:hover { color: var(--hi); background: var(--bg); }
+
+.files-foot {
+  flex: none;
+  margin: 0 16px;
+  padding: 12px 0 4px;
+  border-top: 1px solid var(--line);
+}
+.files-foot-line {
+  padding-top: 5px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--dim);
+}
+
 .rail-setup {
   flex: none;
   margin: 0 16px;

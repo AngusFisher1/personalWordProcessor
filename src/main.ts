@@ -39,9 +39,20 @@ import {
   snapshot,
   undo,
 } from './history';
-import { download, exportJson, importJson, load, save } from './persist';
+import {
+  download,
+  duplicateDoc,
+  exportJson,
+  importJson,
+  load,
+  loadById,
+  readIndex,
+  removeDoc,
+  save,
+  storageBytes,
+} from './persist';
 import type { Vault } from './docx-package';
-import { loadOriginal, saveOriginal } from './docx-package';
+import { deleteOriginal, loadOriginal, saveOriginal } from './docx-package';
 import { importDocx } from './docx-import';
 import { closeMenu, iconButton, menuButton, textButton } from './ui';
 import { PALETTES, applyPalette, currentPaletteId } from './theme';
@@ -53,6 +64,8 @@ import {
   railEl,
   updateGutter,
   updateOutline,
+  setLibrary,
+  setRailTab,
   updateRail,
   updateReadout,
   updateSpine,
@@ -99,7 +112,10 @@ function inlineGroup(...kids: HTMLElement[]): HTMLElement {
 function buildToolbar(host: HTMLElement): void {
   host.textContent = '';
 
-  const file = menuButton('File', 'Open, save and export', () => [
+  const file = menuButton('File', 'Documents, open, save and export', () => [
+    { label: 'New document', hint: MOD + 'N', onSelect: () => newDocument() },
+    { label: 'Browse documents', hint: MOD + 'O', onSelect: () => setRailTab('files') },
+    { separator: true },
     { label: 'Open Word document…', onSelect: () => void pickDocx() },
     { separator: true },
     { label: 'Save as Word (.docx)', onSelect: () => void exportWord() },
@@ -213,6 +229,91 @@ function buildToolbar(host: HTMLElement): void {
       MOD + 'P'
     )
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * The library
+ *
+ * A document is only ever edited in the DOM, so switching away has to flush
+ * whatever is pending before the model is replaced - otherwise the last few
+ * seconds of typing are lost to the swap rather than to a crash.
+ * ------------------------------------------------------------------ */
+
+function flushSave(): void {
+  clearTimeout(saveTimer);
+  saveTimer = 0;
+  syncModel();
+  save(doc, docMeta());
+}
+
+function docMeta(): { words: number; pages: number } {
+  return {
+    words: (docEl().textContent ?? '').match(/\S+/g)?.length ?? 0,
+    pages: pageCount(),
+  };
+}
+
+function refreshLibrary(): void {
+  setLibrary(readIndex(), doc.id, storageBytes());
+}
+
+function switchTo(id: string): void {
+  if (id === doc.id) return;
+  flushSave();
+  const next = loadById(id);
+  if (!next) return;
+  vault = null;
+  openDoc(next);
+  void restoreVault(next);
+  refreshLibrary();
+}
+
+function newDocument(): void {
+  flushSave();
+  vault = null;
+  const blank = emptyDoc();
+  blank.title = 'Untitled';
+  openDoc(blank);
+  save(blank, { words: 0, pages: 1 });
+  refreshLibrary();
+  ui.title?.focus();
+  ui.title?.select();
+}
+
+function duplicate(id: string): void {
+  if (id === doc.id) flushSave();
+  const source = loadById(id);
+  if (!source) return;
+  const copy = duplicateDoc(source);
+  save(copy, { words: 0, pages: 1 });
+  // The copy has fresh block ids, so it cannot share the original's vault:
+  // it exports as a new document rather than back into someone else's file.
+  switchTo(copy.id);
+}
+
+function remove(id: string): void {
+  const entry = readIndex().find((e) => e.id === id);
+  const name = entry?.title || 'this document';
+  if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
+
+  removeDoc(id);
+  void deleteOriginal(id);
+
+  if (id === doc.id) {
+    // Land somewhere real rather than on a document that no longer exists.
+    const next = readIndex()[0];
+    const replacement = next ? loadById(next.id) : null;
+    vault = null;
+    if (replacement) {
+      openDoc(replacement);
+      void restoreVault(replacement);
+    } else {
+      const blank = emptyDoc();
+      openDoc(blank);
+      save(blank, { words: 0, pages: 1 });
+    }
+  }
+  refreshLibrary();
 }
 
 /** The document name, editable in place at the top of the rail. */
@@ -336,7 +437,7 @@ function scheduleSave(): void {
   }
   saveTimer = window.setTimeout(() => {
     syncModel();
-    save(doc);
+    save(doc, docMeta());
   }, 1000);
 }
 
@@ -414,7 +515,8 @@ export async function openDocxFile(file: File): Promise<void> {
     // Kept out of localStorage: too big, and only the bytes can rebuild the
     // vault that makes the round trip faithful.
     void saveOriginal(imported.id, bytes);
-    save(doc);
+    save(doc, docMeta());
+    refreshLibrary();
     showWarnings(v);
   } catch (err) {
     alert('Could not open that file: ' + (err as Error).message);
@@ -462,7 +564,8 @@ async function pickJson(): Promise<void> {
         vault = null;
         openDoc(doc);
         snapshot('structural');
-        save(doc);
+        save(doc, docMeta());
+        refreshLibrary();
       } catch (err) {
         alert('Could not import that file: ' + (err as Error).message);
       }
@@ -550,6 +653,10 @@ function boot(): void {
       caretAtStart(target);
       updateToolbar();
     },
+    onOpenDoc: (id) => switchTo(id),
+    onNewDoc: () => newDocument(),
+    onDuplicateDoc: (id) => duplicate(id),
+    onDeleteDoc: (id) => remove(id),
   });
   mountTitle();
   const bar = document.getElementById('rail-actions');
@@ -566,6 +673,8 @@ function boot(): void {
   const restored = load();
   openDoc(restored ?? sampleDoc());
   if (restored) void restoreVault(restored);
+  else save(doc, docMeta());
+  refreshLibrary();
 
   bindShortcuts(root);
   bindPaste(root);
@@ -593,6 +702,18 @@ function boot(): void {
   });
   window.addEventListener('resize', () => refreshChrome());
 
+  window.addEventListener('keydown', (e) => {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    const k = e.key.toLowerCase();
+    if (k === 'n') {
+      e.preventDefault();
+      newDocument();
+    } else if (k === 'o') {
+      e.preventDefault();
+      setRailTab('files');
+    }
+  });
+
   document.addEventListener('wp:changed', () => {
     updateToolbar();
     scheduleSave();
@@ -601,6 +722,7 @@ function boot(): void {
   document.addEventListener('wp:saved', (e) => {
     saveState = (e as CustomEvent).detail?.ok ? 'saved' : 'failed';
     updateToolbar();
+    refreshLibrary();
   });
 
   // A late font swap would silently invalidate every cached height.
@@ -625,11 +747,7 @@ function boot(): void {
     paginate();
   });
 
-  window.addEventListener('beforeunload', () => {
-    clearTimeout(saveTimer);
-    syncModel();
-    save(doc);
-  });
+  window.addEventListener('beforeunload', () => flushSave());
 
   root.focus();
   updateToolbar();

@@ -103,6 +103,11 @@ export function closeMenu(): void {
   if (closeOpenMenu) closeOpenMenu();
 }
 
+export function openMenuAt(anchor: HTMLElement, items: MenuItem[]): void {
+  closeMenu();
+  openPanel(anchor, items);
+}
+
 function openPanel(anchor: HTMLElement, items: MenuItem[]): void {
   const panel = document.createElement('div');
   panel.className = 'menu';

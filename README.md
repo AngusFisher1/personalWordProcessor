@@ -43,6 +43,27 @@ Every control calls `preventDefault` on mousedown and never takes focus. A
 control that takes focus destroys the document selection, and then Bold has
 nothing to apply itself to.
 
+### The library
+
+The rail's FILES tab lists every document, newest first, with a type-to-filter
+box and a recency fade down the list. Clicking one opens it; the row menu
+duplicates or deletes. `New document` and `Browse documents` are in the File
+menu, on Cmd/Ctrl+N and Cmd/Ctrl+O.
+
+Two things this has to get right:
+
+- **Switching flushes first.** A document is only ever edited in the DOM, so
+  replacing the model without writing the pending autosave loses the last few
+  seconds of typing - to the swap rather than to a crash, which is worse
+  because it looks deliberate.
+- **A duplicate gets fresh block ids.** Block ids are keys into the source
+  document's preservation vault. A copy that kept them would export itself
+  back into someone else's original file.
+
+Deleting a document also deletes the original .docx bytes held for it in
+IndexedDB, and if it was the open one the app lands on the next most recent
+rather than on a document that no longer exists.
+
 ### Palettes
 
 Twelve, seven dark and five light, each defined as ten tokens - `bg`, `rail`,

@@ -16,6 +16,14 @@ export interface IndexEntry {
   id: string;
   title: string;
   updatedAt: number;
+  /** Counts kept in the index so the library lists without loading anything. */
+  words: number;
+  pages: number;
+}
+
+export interface DocMeta {
+  words: number;
+  pages: number;
 }
 
 /** localStorage throws when full; callers learn about it through this event. */
@@ -25,12 +33,19 @@ function announce(ok: boolean, error?: unknown): void {
   );
 }
 
-export function save(doc: Doc): void {
+export function save(doc: Doc, meta?: DocMeta): void {
   try {
     localStorage.setItem(docKey(doc.id), JSON.stringify(doc));
+    const prev = readIndex().find((e) => e.id === doc.id);
     const idx = readIndex().filter((e) => e.id !== doc.id);
-    idx.unshift({ id: doc.id, title: doc.title, updatedAt: Date.now() });
-    localStorage.setItem(INDEX_KEY, JSON.stringify(idx.slice(0, 50)));
+    idx.unshift({
+      id: doc.id,
+      title: doc.title,
+      updatedAt: Date.now(),
+      words: meta?.words ?? prev?.words ?? 0,
+      pages: meta?.pages ?? prev?.pages ?? 1,
+    });
+    localStorage.setItem(INDEX_KEY, JSON.stringify(idx));
     localStorage.setItem(LAST_KEY, doc.id);
     announce(true);
   } catch (error) {
@@ -49,15 +64,69 @@ export function readIndex(): IndexEntry[] {
 }
 
 export function load(): Doc | null {
+  const id = localStorage.getItem(LAST_KEY) ?? readIndex()[0]?.id;
+  return id ? loadById(id) : null;
+}
+
+export function loadById(id: string): Doc | null {
   try {
-    const id = localStorage.getItem(LAST_KEY) ?? readIndex()[0]?.id;
-    if (!id) return null;
     const raw = localStorage.getItem(docKey(id));
     if (!raw) return null;
     return coerce(JSON.parse(raw));
   } catch {
     return null;
   }
+}
+
+/** Forget a document entirely: its content, its index entry, its original. */
+export function removeDoc(id: string): void {
+  try {
+    localStorage.removeItem(docKey(id));
+    localStorage.setItem(
+      INDEX_KEY,
+      JSON.stringify(readIndex().filter((e) => e.id !== id))
+    );
+    if (localStorage.getItem(LAST_KEY) === id) localStorage.removeItem(LAST_KEY);
+  } catch {
+    /* nothing recoverable to do */
+  }
+}
+
+/** A copy with fresh ids, so editing it cannot disturb the original. */
+export function duplicateDoc(doc: Doc): Doc {
+  const copy: Doc = JSON.parse(JSON.stringify(doc));
+  copy.id = newId();
+  copy.title = doc.title.replace(/\s*\(copy( \d+)?\)$/, '') + ' (copy)';
+  // New block ids: the originals are keys into the source document's vault,
+  // and two documents must never claim the same preserved XML.
+  for (const b of copy.blocks) {
+    if ((b as { kind?: string }).kind === 'table') {
+      const t = b as { id: string; rows: { id: string; cells: { id: string }[][] }[] };
+      t.id = newId();
+      for (const row of t.rows) {
+        row.id = newId();
+        for (const cell of row.cells) for (const p of cell) p.id = newId();
+      }
+    } else {
+      (b as { id: string }).id = newId();
+    }
+  }
+  return copy;
+}
+
+/** Bytes of localStorage the documents occupy, for the library footer. */
+export function storageBytes(): number {
+  let total = 0;
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (!k || !k.startsWith('wp:')) continue;
+      total += (localStorage.getItem(k) ?? '').length;
+    }
+  } catch {
+    return 0;
+  }
+  return total;
 }
 
 export function exportJson(doc: Doc): string {

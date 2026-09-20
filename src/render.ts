@@ -245,6 +245,10 @@ function isBrOnly(el: HTMLElement): boolean {
  * this before measuring so it always starts from one element per paragraph.
  */
 export function mergeGroup(g: Group): void {
+  if (isTableEl(g.head)) {
+    mergeTableGroup(g);
+    return;
+  }
   for (const t of g.tails) {
     // A piece the user emptied contributes only its placeholder <br>, which
     // would otherwise show up as a spurious line break in the merged text.
@@ -256,6 +260,23 @@ export function mergeGroup(g: Group): void {
   g.tails.length = 0;
   clearSplitMarks(g.head);
   if (!g.head.firstChild) g.head.innerHTML = '<br>';
+}
+
+/** Fold a split table back together, dropping the repeated header copies. */
+function mergeTableGroup(g: Group): void {
+  const body = g.head.querySelector('tbody');
+  for (const t of g.tails) {
+    const tb = t.querySelector('tbody');
+    if (body && tb) {
+      for (const row of Array.from(tb.children) as HTMLElement[]) {
+        if (row.dataset.repeat) continue; // a copy, not a row
+        body.appendChild(row);
+      }
+    }
+    t.remove();
+  }
+  g.tails.length = 0;
+  clearSplitMarks(g.head);
 }
 
 export function mergeAllGroups(root: HTMLElement = docEl()): void {

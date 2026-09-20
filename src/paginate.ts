@@ -63,9 +63,16 @@ const KEEP_CASCADE_MAX = 3;
 interface LineInfo {
   /** Border-box height, sub-pixel. */
   height: number;
+  /** Splittable units: lines for a paragraph, rows for a table. */
   lineCount: number;
-  /** Used line box height. */
+  /** Used line box height. Uniform, so paragraphs need no per-unit array. */
   lineH: number;
+  /** Per-unit heights, for tables, whose rows are all different. */
+  unitHeights?: number[];
+  /** Leading rows to repeat at the top of each continuation. */
+  headerRows?: number;
+  headerHeight?: number;
+  isTable?: boolean;
   /** Top padding plus top border. */
   padTop: number;
   /** Bottom padding plus bottom border. */
@@ -108,15 +115,31 @@ function keyFor(el: HTMLElement): string {
 function measureLines(el: HTMLElement): LineInfo {
   const box = el.getBoundingClientRect();
   if (isTableEl(el)) {
-    // One indivisible unit: a table splits at row boundaries, not line ones,
-    // and that is handled separately.
+    // A table's units are its rows, and unlike lines they are all different
+    // heights, so they are measured individually.
     const h = box.height || measureClone(el);
+    const cs0 = getComputedStyle(el);
+    const rows = (
+      Array.from(el.querySelectorAll('tbody > tr')) as HTMLElement[]
+    ).filter((r) => !r.dataset.repeat);
+    const unitHeights = rows.map((r) => r.getBoundingClientRect().height);
+    // Only the leading run of header rows repeats.
+    let headerRows = 0;
+    while (headerRows < rows.length && rows[headerRows].classList.contains('hdr')) {
+      headerRows++;
+    }
+    let headerHeight = 0;
+    for (let i = 0; i < headerRows; i++) headerHeight += unitHeights[i];
     return {
       height: h,
-      lineCount: 1,
-      lineH: h,
-      padTop: 0,
-      padBottom: 0,
+      lineCount: Math.max(1, rows.length),
+      lineH: rows.length ? h / rows.length : h,
+      unitHeights,
+      headerRows,
+      headerHeight,
+      isTable: true,
+      padTop: parseFloat(cs0.paddingTop) || 0,
+      padBottom: parseFloat(cs0.paddingBottom) || 0,
       inkTops: [],
       textLen: 0,
       starts: new Map(),
@@ -423,10 +446,17 @@ function lineCountOf(info: LineInfo): number {
   return info.lineCount;
 }
 
-/** Rendered height of the piece covering lines [from, to). */
+/** Rendered height of the piece covering units [from, to). */
 function pieceHeight(info: LineInfo, from: number, to: number): number {
-  const n = Math.max(0, Math.min(to, info.lineCount) - from);
-  let h = n * info.lineH;
+  const end = Math.min(to, info.lineCount);
+  let h = 0;
+  if (info.unitHeights) {
+    for (let i = from; i < end; i++) h += info.unitHeights[i];
+    // A continuation carries a copy of the header rows.
+    if (from > 0 && from >= (info.headerRows ?? 0)) h += info.headerHeight ?? 0;
+  } else {
+    h = Math.max(0, end - from) * info.lineH;
+  }
   if (from === 0) h += info.padTop; // only the first piece keeps top padding
   if (to >= info.lineCount) h += info.padBottom; // only the last keeps bottom
   return h;
@@ -452,6 +482,20 @@ function minPlaceable(
 
 /** Largest line index (exclusive) that still fits in `remaining`. */
 function linesThatFit(info: LineInfo, from: number, remaining: number): number {
+  if (info.unitHeights) {
+    let used =
+      from === 0
+        ? info.padTop
+        : from >= (info.headerRows ?? 0)
+          ? info.headerHeight ?? 0
+          : 0;
+    let n = from;
+    while (n < info.lineCount && used + info.unitHeights[n] <= remaining) {
+      used += info.unitHeights[n];
+      n++;
+    }
+    return n;
+  }
   const lead = from === 0 ? info.padTop : 0;
   const fits = Math.floor((remaining - lead) / info.lineH + 1e-6);
   return Math.max(from, Math.min(info.lineCount, from + Math.max(0, fits)));
@@ -513,16 +557,28 @@ function assign(groups: Group[], limit: number): { pages: Piece[][]; need: numbe
       continue;
     }
 
-    // Does not fit. Try a line-level split.
+    // Does not fit. Try to split it.
     const maxFit = linesThatFit(info, from, limit - running);
-    // If taking every line that fits would leave a widow, back off to the
+    // Leave at least one unit for the next page either way.
+    const widow = info.isTable ? 1 : def.widowMin;
+    // If taking every unit that fits would leave a widow, back off to the
     // latest split that does not, rather than abandoning the split entirely.
-    const fit = Math.min(maxFit, lines - def.widowMin);
-    const splittable =
-      !def.keepLines &&
-      info.lineCount > 1 &&
-      info.textLen > 0 &&
-      fit - from >= def.orphanMin;
+    const fit = Math.min(maxFit, lines - widow);
+
+    let splittable: boolean;
+    if (info.isTable) {
+      // A repeated header is not content, so a page holding only the header
+      // and one row has stranded that row. Two real rows, or move it whole.
+      const headers = info.headerRows ?? 0;
+      const rowsHere = fit - from - (from === 0 ? headers : 0);
+      splittable = info.lineCount > 1 && rowsHere >= 2 && lines - fit >= 1;
+    } else {
+      splittable =
+        !def.keepLines &&
+        info.lineCount > 1 &&
+        info.textLen > 0 &&
+        fit - from >= def.orphanMin;
+    }
 
     if (splittable) {
       cur().push({ g, info, from, to: fit });
@@ -598,6 +654,61 @@ function splitOffElement(src: HTMLElement, offset: number, id: string): HTMLElem
 }
 
 /**
+ * Split a table after `fromRow`, returning the continuation element.
+ *
+ * Rows are MOVED into the new table, and the leading header rows are cloned
+ * on top of it. The clones are marked so measurement, readModel and the caret
+ * all know to skip them: they are a render artifact, not extra rows.
+ */
+function splitTableElement(
+  src: HTMLElement,
+  fromRow: number,
+  headerEls: HTMLElement[],
+  id: string
+): HTMLElement | null {
+  const srcTable = src.querySelector('table');
+  const srcBody = src.querySelector('tbody');
+  if (!srcTable || !srcBody) return null;
+
+  const wrap = document.createElement('div');
+  wrap.className = src.className;
+  wrap.dataset.blockId = newId();
+  wrap.dataset.continuesFrom = id;
+  wrap.classList.add('split-cont');
+
+  const table = document.createElement('table');
+  table.style.width = srcTable.style.width;
+  const colgroup = srcTable.querySelector('colgroup');
+  if (colgroup) table.appendChild(colgroup.cloneNode(true));
+  const body = document.createElement('tbody');
+
+  const rows = (Array.from(srcBody.children) as HTMLElement[]).filter(
+    (r) => !r.dataset.repeat
+  );
+  if (fromRow <= 0 || fromRow >= rows.length) return null;
+
+  // The rows to repeat come from the ORIGINAL table. Taking them from the
+  // piece being split would copy its first data row on the third page,
+  // because a continuation's own header is already a marked copy.
+  for (const header of headerEls) {
+    const clone = header.cloneNode(true) as HTMLElement;
+    clone.dataset.repeat = '1';
+    clone.setAttribute('contenteditable', 'false');
+    // Ids must stay unique; the original row keeps them.
+    for (const el of Array.from(clone.querySelectorAll('[data-block-id]'))) {
+      (el as HTMLElement).removeAttribute('data-block-id');
+    }
+    body.appendChild(clone);
+  }
+  for (let i = fromRow; i < rows.length; i++) body.appendChild(rows[i]);
+
+  table.appendChild(body);
+  wrap.appendChild(table);
+  src.parentElement?.insertBefore(wrap, src.nextSibling);
+  return wrap;
+}
+
+/**
  * Give every logical block the pieces its assignment calls for. The head keeps
  * its element identity - only continuations are created and destroyed - so the
  * caret's own element usually survives a reflow untouched.
@@ -620,8 +731,37 @@ function materialize(assigned: Piece[][]): void {
     }
 
     const info = pieces[0].info;
-    const elTop = head.getBoundingClientRect().top;
     const id = head.dataset.blockId as string;
+
+    if (info.isTable) {
+      head.classList.add('split-more');
+      pieces[0].el = head;
+      const headerEls = (
+        Array.from(head.querySelectorAll('tbody > tr')) as HTMLElement[]
+      )
+        .filter((r) => !r.dataset.repeat)
+        .slice(0, info.headerRows ?? 0);
+      let src = head;
+      let ok = true;
+      for (let i = 1; i < pieces.length; i++) {
+        // Each continuation splits what is left, so the row index is relative
+        // to the piece being cut, not to the original table.
+        const cutAt = pieces[i].from - pieces[i - 1].from;
+        const tail = splitTableElement(src, cutAt, headerEls, id);
+        if (!tail) {
+          ok = false;
+          break;
+        }
+        tail.dataset.base = String(pieces[i].from);
+        if (i < pieces.length - 1) tail.classList.add('split-more');
+        pieces[i].el = tail;
+        src = tail;
+      }
+      if (!ok) for (const p of pieces) p.el = p.el ?? head;
+      continue;
+    }
+
+    const elTop = head.getBoundingClientRect().top;
 
     // Compute every boundary against the merged element before cutting it.
     const offsets: number[] = [];

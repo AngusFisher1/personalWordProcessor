@@ -45,6 +45,7 @@ import {
 } from './headers';
 import { closeFind, isFindOpen, openFind, refreshFind, selectedText } from './findbar';
 import { bindPaste } from './paste';
+import { bindTables } from './tables';
 import {
   canRedo,
   canUndo,
@@ -808,6 +809,15 @@ function boot(): void {
 
   bindShortcuts(root);
   bindPaste(root);
+  bindTables(root, {
+    onChanged: () => {
+      normalize();
+      layout();
+      snapshot('structural');
+      updateToolbar();
+      scheduleSave();
+    },
+  });
 
   root.addEventListener('input', (e) => {
     closeMenu();

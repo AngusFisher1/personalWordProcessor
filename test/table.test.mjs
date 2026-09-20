@@ -67,5 +67,31 @@ console.log('\nediting a cell survives export');
   check('other parts untouched', others.length === 0, others.join(', '));
 }
 
+console.log('\nstructural edits export as valid OOXML');
+{
+  const edited = structuredClone(doc);
+  const t = edited.blocks.find((b) => b.kind === 'table');
+  // Add a column, the way the context menu does.
+  t.cols.push({ width: 120 });
+  for (const row of t.rows) row.cells.push([{ id: 'new-' + row.id, styleId: 'Body', html: 'x' }]);
+  // And a row.
+  t.rows.push({
+    id: 'newrow',
+    headerRow: false,
+    cells: t.cols.map((_c, i) => [{ id: 'nr' + i, styleId: 'Body', html: 'y' }]),
+  });
+
+  const out = await unzip(await (await exportDocx(edited, vault)).arrayBuffer());
+  const xml = dec.decode(out.get('word/document.xml'));
+  const gridCols = (xml.match(/<w:gridCol[ />]/g) || []).length;
+  const rows = (xml.match(/<w:tr[ >]/g) || []).length;
+  const cells = (xml.match(/<w:tc[ >]/g) || []).length;
+  check('the grid matches the new column count', gridCols === 4, String(gridCols));
+  check('the new row is present', rows === 5, String(rows));
+  check('every row has every column', cells === 20, String(cells));
+  check('table properties still present', xml.includes('<w:tblPr>'));
+  check('the added text is in the file', xml.includes('>y<'));
+}
+
 console.log(failures === 0 ? '\nall table checks passed' : `\n${failures} failed`);
 process.exit(failures === 0 ? 0 : 1);

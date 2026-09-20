@@ -21,6 +21,7 @@ import {
 } from './caret';
 import { paginate, paginateIfNeeded } from './paginate';
 import { flushTyping, redo, snapshot, undo } from './history';
+import { arrowInTable, tabInTable } from './tables';
 
 /** Broadcast so main.ts can autosave and refresh the toolbar. */
 export function notifyChanged(): void {
@@ -324,9 +325,20 @@ export function bindShortcuts(root: HTMLElement): void {
     }
 
     if (e.key === 'Tab') {
+      // Inside a table, Tab walks the cells and grows the table at the end.
+      if (tabInTable(e.shiftKey)) {
+        e.preventDefault();
+        return;
+      }
       const blk = caretBlock();
       // No-op in a Bullet in v1; never insert a literal tab.
       if (blk && styleOf(blk) === 'Bullet') e.preventDefault();
+      return;
+    }
+
+    if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+      // Only intercepted at a cell's edge; inside one, arrows behave.
+      if (arrowInTable(e.key === 'ArrowUp' ? -1 : 1)) e.preventDefault();
       return;
     }
   });

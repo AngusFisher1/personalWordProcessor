@@ -222,7 +222,19 @@ function tableXml(t: TableBlock, vault: Vault): string {
   if (original && tableUnchanged(t, vault)) return original;
 
   const pr = vault.tablePr.get(t.id);
-  let out = '<w:tbl>' + (pr?.tblPr ?? '') + (pr?.tblGrid ?? '');
+  // The preserved grid describes the columns the table HAD. Adding or
+  // removing one makes it disagree with the rows, which is the kind of
+  // mismatch Word offers to repair, so regenerate it when the count moved.
+  const keptCols = (pr?.tblGrid.match(/<w:gridCol[ />]/g) ?? []).length;
+  const grid =
+    keptCols === t.cols.length && pr?.tblGrid
+      ? pr.tblGrid
+      : '<w:tblGrid>' +
+        t.cols
+          .map((c) => `<w:gridCol w:w="${Math.max(1, Math.round(c.width * 15))}"/>`)
+          .join('') +
+        '</w:tblGrid>';
+  let out = '<w:tbl>' + (pr?.tblPr ?? '') + grid;
   for (const row of t.rows) {
     out += '<w:tr>' + (vault.rowPr.get(row.id) ?? '');
     for (let i = 0; i < row.cells.length; i++) {

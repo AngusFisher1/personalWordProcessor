@@ -363,6 +363,9 @@ html, body {
   outline-offset: 2px;
 }
 
+body.col-resizing, body.col-resizing * { cursor: col-resize !important; }
+body.col-resizing { user-select: none; }
+
 /* ---------- gutter: page numbers and break rules ----------
    Drawn as an overlay over the canvas rather than inside the pages, so none
    of it can end up on the paper or in the printed output. */

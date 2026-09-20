@@ -758,11 +758,255 @@ body.col-resizing { user-select: none; }
 
 /* ---------- print ---------- */
 
+
+/* ---------- command palette ----------
+   The one control in the program that takes focus, because it has a text
+   field. It sits over everything, high enough on the page that the list
+   grows downward into empty space rather than over the line being edited. */
+.cmd-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 14vh;
+  background: rgba(0, 0, 0, 0.45);
+}
+.cmd-panel {
+  width: min(560px, calc(100vw - 48px));
+  display: flex;
+  flex-direction: column;
+  max-height: 64vh;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  box-shadow: 0 30px 70px -28px rgba(0, 0, 0, 0.95);
+  overflow: hidden;
+}
+.cmd-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.cmd-mark {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  background: var(--acc);
+}
+.cmd-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--hi);
+  font: 14px var(--ui);
+}
+.cmd-input:focus { outline: none; }
+.cmd-input::placeholder { color: var(--dim); }
+
+.cmd-list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 5px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.cmd-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 9px;
+  border-radius: 2px;
+  cursor: pointer;
+  font: 12.5px var(--ui);
+  color: var(--mid);
+}
+.cmd-row.on { background: var(--bg); color: var(--hi); }
+.cmd-tick {
+  flex: none;
+  width: 11px;
+  font-size: 10px;
+  color: var(--acc);
+}
+.cmd-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* The group is what tells you WHY a command matched, so it stays legible
+   rather than fading out with the rest of the secondary text. */
+.cmd-group {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.16em;
+  color: var(--dim);
+}
+.cmd-row.on .cmd-group { color: var(--mid); }
+.cmd-hint {
+  flex: none;
+  min-width: 46px;
+  text-align: right;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+}
+.cmd-empty {
+  padding: 18px 10px;
+  text-align: center;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.16em;
+  color: var(--dim);
+}
+
+
+/* ---------- the formatting bar over a selection ----------
+   In the canvas overlay, not inside a page: anything inside .page is inside
+   the contenteditable and would print. */
+.formatbar {
+  position: absolute;
+  z-index: 45;
+  /* The canvas inherits the document's ink colour, which is black on white
+     paper; the bar is chrome and takes the chrome's. */
+  color: var(--mid);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  box-shadow: 0 10px 28px -12px rgba(0, 0, 0, 0.55);
+  animation: fb-in 90ms ease-out;
+}
+@keyframes fb-in {
+  from { opacity: 0; transform: translateY(3px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .formatbar { animation: none; }
+}
+.fb-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 25px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--mid);
+  font: 12px var(--ui);
+  cursor: pointer;
+}
+.fb-btn:hover { background: var(--bg); color: var(--hi); }
+.fb-btn.on { color: var(--acc); }
+.fb-style { min-width: 96px; justify-content: space-between; }
+.fb-caret {
+  width: 0;
+  height: 0;
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  border-top: 3px solid currentColor;
+  opacity: 0.6;
+}
+.fb-b { font-weight: 700; }
+.fb-i { font-style: italic; }
+.fb-u { text-decoration: underline; }
+.fb-sep {
+  width: 1px;
+  height: 15px;
+  margin: 0 2px;
+  background: var(--line);
+}
+
+
+/* ---------- export sheet ----------
+   A menu says what you can produce; this says what each one costs. */
+.xs-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  background: rgba(0, 0, 0, 0.45);
+}
+.xs-panel {
+  width: min(460px, calc(100vw - 48px));
+  max-height: 72vh;
+  overflow-y: auto;
+  padding: 5px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  box-shadow: 0 30px 70px -28px rgba(0, 0, 0, 0.95);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+.xs-head {
+  padding: 13px 12px 12px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 5px;
+}
+.xs-title {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.24em;
+  color: var(--dim);
+}
+.xs-sub {
+  padding-top: 5px;
+  font: 13.5px var(--ui);
+  color: var(--hi);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.xs-row {
+  display: block;
+  width: 100%;
+  padding: 9px 12px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+.xs-row:hover { background: var(--bg); }
+.xs-top { display: flex; align-items: baseline; gap: 9px; }
+.xs-label { flex: 1; font: 12.5px var(--ui); color: var(--hi); }
+.xs-row.quiet .xs-label { color: var(--mid); }
+.xs-tag {
+  flex: none;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.16em;
+  color: var(--dim);
+}
+.xs-note {
+  padding-top: 3px;
+  font: 11px var(--ui);
+  line-height: 1.45;
+  color: var(--dim);
+}
+.xs-sep {
+  height: 1px;
+  margin: 6px 12px;
+  background: var(--line);
+}
+
 @page { size: letter; margin: 0; }
 
 @media print {
   html, body { overflow: visible; background: #fff; height: auto; }
-  #rail, #measure, #banner, .menu, .gutter, .spine, .readout { display: none; }
+  #rail, #measure, #banner, .menu, .gutter, .spine, .readout,
+  .cmd-scrim, .formatbar, .xs-scrim { display: none; }
   #app, #canvas, #doc {
     margin: 0;
     padding: 0;

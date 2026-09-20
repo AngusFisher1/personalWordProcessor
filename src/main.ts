@@ -75,6 +75,10 @@ import type { Vault } from './docx-package';
 import { deleteOriginal, loadOriginal, saveOriginal } from './docx-package';
 import { importDocx } from './docx-import';
 import { closeMenu, iconButton, menuButton, textButton } from './ui';
+import type { Command } from './commandbar';
+import { closeCommands, isCommandsOpen, openCommands } from './commandbar';
+import { bindFormatBar, hideFormatBar } from './formatbar';
+import { closeExportSheet, isExportSheetOpen, openExportSheet } from './exportsheet';
 import { toHtml, toMarkdown } from './export-text';
 import { fromMarkdown } from './import-md';
 import { exportLibrary, libraryFileName } from './export-library';
@@ -138,6 +142,15 @@ function buildToolbar(host: HTMLElement): void {
   host.textContent = '';
 
   host.appendChild(
+    textButton(
+      'Commands',
+      `Every command, by name (${MOD}K)`,
+      () => toggleCommands(),
+      'tb-cmd',
+      MOD + 'K'
+    )
+  );
+  host.appendChild(
     textButton('Find', `Find and replace (${MOD}F)`, () => showFind(), '', MOD + 'F')
   );
   ui.hf = textButton(
@@ -154,31 +167,12 @@ function buildToolbar(host: HTMLElement): void {
     { separator: true },
     { label: 'Open Word document…', onSelect: () => void pickDocx() },
     { separator: true },
+    { label: 'Export…', hint: MOD + 'E', onSelect: () => showExportSheet() },
     { label: 'Save as Word (.docx)', onSelect: () => void exportWord() },
     { label: 'Print / save as PDF', hint: MOD + 'P', onSelect: () => void printDocument() },
     { separator: true },
-    { heading: 'Plain formats' },
-    {
-      label: 'Export Markdown',
-      onSelect: () => saveText('.md', 'text/markdown', () => toMarkdown(doc)),
-    },
-    {
-      label: 'Export HTML',
-      onSelect: () => saveText('.html', 'text/html', () => toHtml(doc)),
-    },
-    {
-      label: 'Export JSON',
-      onSelect: () => saveText('.json', 'application/json', () => exportJson(doc)),
-    },
-    { separator: true },
     { label: 'Import Markdown…', onSelect: () => void pickText('md') },
     { label: 'Import JSON…', onSelect: () => void pickText('json') },
-    { separator: true },
-    {
-      label: 'Export whole library…',
-      hint: 'ZIP',
-      onSelect: () => void exportWholeLibrary(),
-    },
   ]);
   host.appendChild(file.el);
 
@@ -796,12 +790,190 @@ async function exportWholeLibrary(): Promise<void> {
   }
 }
 
+/**
+ * The export sheet: every format, with what each one costs.
+ *
+ * The .docx line changes wording depending on whether this document came
+ * from a package, because the guarantee is completely different. Promising
+ * a byte-identical round trip for a document that has no original to go
+ * back into would be a lie told at exactly the wrong moment.
+ */
+function showExportSheet(): void {
+  closeMenu();
+  syncModel();
+  openExportSheet(
+    [
+      {
+        label: 'Word document',
+        tag: '.DOCX',
+        note: vault
+          ? 'Back into the original package. Every part you did not touch comes ' +
+            'back byte for byte, pictures and all.'
+          : 'A new Word document with the six named styles. This document has no ' +
+            'original package to write back into.',
+        run: () => void exportWord(),
+      },
+      {
+        label: 'Print or save as PDF',
+        tag: MOD + 'P',
+        note:
+          'Exactly what is on screen. Set margins to None and turn page headers ' +
+          'off in the print dialog.',
+        run: () => void printDocument(),
+      },
+      {
+        label: 'Markdown',
+        tag: '.MD',
+        note:
+          'Headings, lists, tables and emphasis as plain text, readable in fifty ' +
+          'years with no software. Pictures are named, not carried.',
+        run: () => saveText('.md', 'text/markdown', () => toMarkdown(doc)),
+      },
+      {
+        label: 'HTML page',
+        tag: '.HTML',
+        note:
+          'One self-contained file with the styles and page setup inlined. Opens ' +
+          'in any browser; references nothing.',
+        run: () => saveText('.html', 'text/html', () => toHtml(doc)),
+      },
+      {
+        label: 'JSON',
+        tag: '.JSON',
+        note:
+          'The document model verbatim. The only lossless copy, and the only one ' +
+          'this program reads back.',
+        run: () => saveText('.json', 'application/json', () => exportJson(doc)),
+      },
+      {
+        label: 'The whole library',
+        tag: '.ZIP',
+        secondary: true,
+        note:
+          'Every document, as Markdown, JSON and HTML, in one archive. The answer ' +
+          'to what happens if this program stops existing.',
+        run: () => void exportWholeLibrary(),
+      },
+    ],
+    doc.title || 'Untitled'
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * The command palette
+ *
+ * Built fresh each time it opens, so the ticks next to the current style
+ * and the current palette are the current ones. Everything the toolbar can
+ * do is here; the toolbar is the shortcut, not the other way round.
+ * ------------------------------------------------------------------ */
+
+function commands(): Command[] {
+  const out: Command[] = [];
+  const add = (
+    group: string,
+    label: string,
+    run: () => void,
+    extra: Partial<Command> = {}
+  ): void => {
+    out.push({ id: group + ':' + label, group, label, run, ...extra });
+  };
+
+  const style = currentStyle();
+  for (const id of STYLE_IDS) {
+    add('STYLE', STYLES[id].label, () => setBlockStyle(id), {
+      checked: id === style,
+      keywords: 'paragraph style ' + id,
+    });
+  }
+
+  const inline = inlineState();
+  add('FORMAT', 'Bold', () => toggleInline('bold'), {
+    hint: MOD + 'B',
+    checked: inline.bold,
+  });
+  add('FORMAT', 'Italic', () => toggleInline('italic'), {
+    hint: MOD + 'I',
+    checked: inline.italic,
+  });
+  add('FORMAT', 'Underline', () => toggleInline('underline'), {
+    hint: MOD + 'U',
+    checked: inline.underline,
+  });
+
+  add('EDIT', 'Undo', () => {
+    undo();
+    afterChange();
+  }, { hint: MOD + 'Z' });
+  add('EDIT', 'Redo', () => {
+    redo();
+    afterChange();
+  }, { hint: MOD + SHIFT + 'Z' });
+  add('EDIT', 'Find and replace', () => showFind(), { hint: MOD + 'F' });
+  add('EDIT', 'Edit header and footer', () => toggleHF(), {
+    keywords: 'letterhead page number',
+  });
+
+  add('FILE', 'New document', () => newDocument(), { hint: MOD + 'N' });
+  add('FILE', 'Browse documents', () => setRailTab('files'), {
+    hint: MOD + 'O',
+    keywords: 'library open recent',
+  });
+  add('FILE', 'Open Word document…', () => void pickDocx(), { keywords: 'docx import' });
+  add('FILE', 'Print / save as PDF', () => void printDocument(), { hint: MOD + 'P' });
+
+  add('EXPORT', 'Export…', () => showExportSheet(), {
+    hint: MOD + 'E',
+    keywords: 'save as formats sheet',
+  });
+  add('EXPORT', 'Save as Word (.docx)', () => void exportWord(), { keywords: 'docx' });
+  add('EXPORT', 'Export Markdown', () =>
+    saveText('.md', 'text/markdown', () => toMarkdown(doc))
+  );
+  add('EXPORT', 'Export HTML', () => saveText('.html', 'text/html', () => toHtml(doc)));
+  add('EXPORT', 'Export JSON', () =>
+    saveText('.json', 'application/json', () => exportJson(doc))
+  );
+  add('EXPORT', 'Export whole library…', () => void exportWholeLibrary(), {
+    keywords: 'backup everything zip archive independence',
+  });
+  add('IMPORT', 'Import Markdown…', () => void pickText('md'));
+  add('IMPORT', 'Import JSON…', () => void pickText('json'));
+
+  const preset = marginPreset(doc.page);
+  for (const key of Object.keys(MARGINS) as MarginKey[]) {
+    add(
+      'PAGE',
+      key === 'narrow' ? 'Narrow margins — 0.5 in' : 'Normal margins — 1 in',
+      () => setMarginPreset(key),
+      { checked: preset === key, keywords: 'margin page setup' }
+    );
+  }
+
+  const nowPalette = currentPaletteId();
+  for (const p of PALETTES) {
+    add('PALETTE', p.label + ' — ' + p.note, () => setPalette(p.id), {
+      checked: p.id === nowPalette,
+      keywords: (p.dark ? 'dark' : 'light') + ' theme colour color',
+    });
+  }
+
+  return out;
+}
+
+function toggleCommands(): void {
+  closeMenu();
+  openCommands(commands());
+}
+
 /* ------------------------------------------------------------------ *
  * Boot
  * ------------------------------------------------------------------ */
 
 function openDoc(d: Doc): void {
   if (isFindOpen()) closeFind();
+  if (isCommandsOpen()) closeCommands();
+  if (isExportSheetOpen()) closeExportSheet();
+  hideFormatBar();
   doc = d;
   setPageSetup(d.page);
   if (ui.title) ui.title.value = d.title;
@@ -952,6 +1124,17 @@ function boot(): void {
   window.addEventListener('resize', () => refreshChrome());
 
   window.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      toggleCommands();
+      return;
+    }
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'e') {
+      e.preventDefault();
+      showExportSheet();
+      return;
+    }
+    if (isCommandsOpen()) return; // the palette owns the keyboard while open
     if (e.key === 'Escape' && isFindOpen()) {
       e.preventDefault();
       closeFind();
@@ -974,6 +1157,18 @@ function boot(): void {
       e.preventDefault();
       showFind();
     }
+  });
+
+  bindFormatBar({
+    bold: () => toggleInline('bold'),
+    italic: () => toggleInline('italic'),
+    underline: () => toggleInline('underline'),
+    setStyle: (id) => setBlockStyle(id),
+    currentStyle,
+    inlineState,
+    // Header editing and the palette both move the selection somewhere the
+    // bar has no business formatting.
+    suppressed: () => isEditingHF() || isCommandsOpen(),
   });
 
   document.addEventListener('wp:changed', () => {

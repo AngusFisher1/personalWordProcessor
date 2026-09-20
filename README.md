@@ -26,11 +26,16 @@ writing the pagination layer is the point of the project.
 
 The workspace is a darkroom. The only light in it is the page.
 
-**Chrome never crosses the paper edge.** Everything floats in the gutter or
-sits in the rail, so the page is the only thing in the room that looks like a
-document. Page numbers, the page-break rules and the document map are drawn as
-an overlay on the canvas rather than inside the pages, which also means none
-of them can end up in the printed output.
+**Persistent chrome never crosses the paper edge.** Everything floats in the
+gutter or sits in the rail, so the page is the only thing in the room that
+looks like a document. Page numbers, the page-break rules and the document map
+are drawn as an overlay on the canvas rather than inside the pages, which also
+means none of them can end up in the printed output.
+
+The one thing that does cross the edge is the formatting bar, and only while
+text is selected. It is drawn in the canvas overlay rather than inside a
+page - anything inside `.page` is inside the contenteditable and would print -
+and it is gone before the next character lands.
 
 The 248px rail holds what the file is (name, page and word count, save state),
 an outline built from the document's own headings, the page setup, and the
@@ -42,6 +47,60 @@ bottom-left in the gutter.
 Every control calls `preventDefault` on mousedown and never takes focus. A
 control that takes focus destroys the document selection, and then Bold has
 nothing to apply itself to.
+
+### The command palette
+
+`Cmd/Ctrl+K`. Every command in the program, reachable by typing part of its
+name: six styles, twelve palettes, two margin presets, five export formats
+and a dozen actions. The rail is where you go to find out what exists; this
+is where you go when you already know.
+
+Two details it has to get right:
+
+- **It takes focus, and nothing else here does.** It has a text field, so it
+  must. That is why it captures the selection on the way in and restores it
+  before running anything - Bold applied to a selection the palette's own
+  input stole is applied to nothing.
+- **Matching is a scored subsequence**, not a fuzzy library: every letter in
+  order, with consecutive letters and word-initial letters worth more, and a
+  short label beating a long one. `exh` finds Export HTML.
+
+The list is rebuilt each time it opens, so the ticks beside the current style
+and the current palette are the current ones.
+
+### The formatting bar
+
+Selecting a phrase and reaching 250px left to bold it is the most repeated
+gesture in the program. A small bar appears over the selection with the
+paragraph style, bold, italic and underline, positioned over the **first**
+line of the selection rather than the centre of its bounding box, which on a
+multi-line selection is the middle of the paragraph rather than where the eye
+is.
+
+It is coalesced on a timer rather than a frame. `selectionchange` fires for
+every character of a drag and each update measures, so batching is necessary,
+but `requestAnimationFrame` does not run at all when the page is considered
+hidden, and a bar that never appears in an embedded view is worse than one
+that measures a millisecond late.
+
+### The export sheet
+
+`Cmd/Ctrl+E`. A menu of file formats tells you what you can produce; it does
+not tell you what each one costs, and here every format costs something
+different. The sheet says so at the moment of choosing:
+
+| | |
+|---|---|
+| Word | back into the original package, byte for byte, pictures and all |
+| PDF | exactly what is on screen |
+| Markdown | the words, readable in fifty years; pictures named, not carried |
+| HTML | one self-contained file, styles and page setup inlined |
+| JSON | the model verbatim, the only lossless copy |
+| The library | every document, in one archive |
+
+The Word line changes wording when the document has no original package to
+write back into. Promising a byte-identical round trip for a document that
+has no original would be a lie told at exactly the wrong moment.
 
 ### The library
 
@@ -114,6 +173,9 @@ All geometry is in CSS pixels at 96px per inch, and the numbers are exact.
 |---|---|
 | `main.ts` | entry, toolbar composition, event wiring, autosave |
 | `ui.ts` | control widgets: buttons and dropdown menus |
+| `commandbar.ts` | the command palette |
+| `formatbar.ts` | the formatting bar over a selection |
+| `exportsheet.ts` | the export sheet, and what each format costs |
 | `theme.ts` | the twelve palettes, as ten tokens each |
 | `shell.ts` | the workspace chrome: rail, gutter, document map, readout |
 | `model.ts` | `Block`, `Doc`, geometry constants, id generation |

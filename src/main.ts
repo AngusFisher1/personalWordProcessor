@@ -9,7 +9,7 @@ import {
   newBlock,
   uniformMargins,
 } from './model';
-import { STYLES, injectStyleSheet } from './styles';
+import { DOC_FONT, STYLES, injectStyleSheet } from './styles';
 import { docEl, readModel, renderAll } from './render';
 import {
   clearHeightCache,
@@ -42,9 +42,17 @@ import { download, exportJson, importJson, load, save } from './persist';
 import type { Vault } from './docx-package';
 import { loadOriginal, saveOriginal } from './docx-package';
 import { importDocx } from './docx-import';
+import {
+  closeMenu,
+  iconButton,
+  menuButton,
+  separator,
+  textButton,
+} from './ui';
 
 let doc: Doc = emptyDoc();
-let saveFailed = false;
+type SaveState = 'saved' | 'pending' | 'failed';
+let saveState: SaveState = 'saved';
 /** The original .docx package, when this document came from one. */
 let vault: Vault | null = null;
 
@@ -53,181 +61,181 @@ let vault: Vault | null = null;
  * ------------------------------------------------------------------ */
 
 const ui = {
-  style: null as HTMLSelectElement | null,
-  margin: null as HTMLSelectElement | null,
+  style: null as ReturnType<typeof menuButton> | null,
+  page: null as ReturnType<typeof menuButton> | null,
   title: null as HTMLInputElement | null,
   bold: null as HTMLButtonElement | null,
   italic: null as HTMLButtonElement | null,
   underline: null as HTMLButtonElement | null,
   undo: null as HTMLButtonElement | null,
   redo: null as HTMLButtonElement | null,
-  status: null as HTMLSpanElement | null,
+  save: null as HTMLSpanElement | null,
+  counts: null as HTMLSpanElement | null,
 };
 
-function button(
-  label: string,
-  title: string,
-  cls: string,
-  onClick: () => void
-): HTMLButtonElement {
-  const b = document.createElement('button');
-  b.textContent = label;
-  b.title = title;
-  if (cls) b.className = cls;
-  // mousedown default would blur the document and drop the selection.
-  b.addEventListener('mousedown', (e) => e.preventDefault());
-  b.addEventListener('click', onClick);
-  return b;
+const IS_MAC = navigator.platform.toLowerCase().includes('mac');
+const MOD = IS_MAC ? '⌘' : 'Ctrl+';
+const SHIFT = IS_MAC ? '⇧' : 'Shift+';
+
+function row(cls: string): HTMLDivElement {
+  const d = document.createElement('div');
+  d.className = 'tb-row ' + cls;
+  return d;
 }
 
-function sep(): HTMLSpanElement {
+function spacer(): HTMLSpanElement {
   const s = document.createElement('span');
-  s.className = 'sep';
+  s.className = 'tb-spacer';
   return s;
 }
 
+/** Grow the title field with its text instead of sitting in a fixed box. */
+function sizeTitle(input: HTMLInputElement): void {
+  const chars = Math.max(8, (input.value || 'Untitled').length);
+  input.style.width = Math.min(440, chars * 8.2 + 26) + 'px';
+}
+
 function buildToolbar(bar: HTMLElement): void {
-  const mod = navigator.platform.toLowerCase().includes('mac') ? 'Cmd' : 'Ctrl';
+  bar.textContent = '';
+  const docRow = row('tb-doc');
+  const fmtRow = row('tb-format');
+  bar.append(docRow, fmtRow);
+
+  /* ---- document row: what the file is, and whether it is safe ---- */
 
   const title = document.createElement('input');
   title.type = 'text';
+  title.id = 'doctitle';
   title.value = doc.title;
-  title.title = 'Document title';
-  title.style.cssText =
-    'font:13px var(--ui);height:28px;border:1px solid transparent;' +
-    'border-radius:4px;padding:0 8px;width:180px;';
-  title.addEventListener('focus', () => (title.style.borderColor = '#d8d8dc'));
-  title.addEventListener('blur', () => (title.style.borderColor = 'transparent'));
+  title.title = 'Document name';
+  title.setAttribute('aria-label', 'Document name');
   title.addEventListener('input', () => {
     doc.title = title.value || 'Untitled';
+    sizeTitle(title);
     scheduleSave();
   });
   ui.title = title;
-  bar.appendChild(title);
+  docRow.appendChild(title);
+  sizeTitle(title);
 
-  bar.appendChild(sep());
+  const saveState = document.createElement('span');
+  saveState.className = 'tb-save';
+  ui.save = saveState;
+  docRow.appendChild(saveState);
 
-  ui.undo = button('↶', `Undo (${mod}+Z)`, '', () => {
+  docRow.appendChild(spacer());
+
+  const counts = document.createElement('span');
+  counts.className = 'tb-counts';
+  ui.counts = counts;
+  docRow.appendChild(counts);
+
+  /* ---- format row ---- */
+
+  const file = menuButton('File', 'Open, save and export', () => [
+    { label: 'Open Word document…', onSelect: () => void pickDocx() },
+    { separator: true },
+    { label: 'Save as Word (.docx)', onSelect: () => void exportWord() },
+    { label: 'Print / save as PDF', hint: MOD + 'P', onSelect: () => void printDocument() },
+    { separator: true },
+    { heading: 'Plain formats' },
+    {
+      label: 'Export JSON',
+      onSelect: () => {
+        syncModel();
+        download(
+          safeName(doc.title) + '.json',
+          new Blob([exportJson(doc)], { type: 'application/json' })
+        );
+      },
+    },
+    { label: 'Import JSON…', onSelect: () => void pickJson() },
+  ]);
+  fmtRow.appendChild(file.el);
+
+  fmtRow.appendChild(separator());
+
+  ui.undo = iconButton('undo', `Undo (${MOD}Z)`, () => {
     undo();
     afterChange();
   });
-  ui.redo = button('↷', `Redo (${mod}+Shift+Z)`, '', () => {
+  ui.redo = iconButton('redo', `Redo (${MOD}${SHIFT}Z)`, () => {
     redo();
     afterChange();
   });
-  bar.appendChild(ui.undo);
-  bar.appendChild(ui.redo);
+  fmtRow.append(ui.undo, ui.redo);
 
-  bar.appendChild(sep());
+  fmtRow.appendChild(separator());
 
-  const style = document.createElement('select');
-  style.title = 'Paragraph style';
-  for (const id of STYLE_IDS) {
-    const o = document.createElement('option');
-    o.value = id;
-    o.textContent = STYLES[id].label;
-    style.appendChild(o);
-  }
-  style.addEventListener('mousedown', () => saveSelection());
-  style.addEventListener('change', () => {
-    restoreSelection();
-    setBlockStyle(style.value as StyleId);
+  // Each entry previews itself in its own style, so the list shows what the
+  // styles look like rather than only what they are called.
+  ui.style = menuButton(
+    'Body',
+    'Paragraph style',
+    () => {
+      const current = currentStyle();
+      return STYLE_IDS.map((id) => {
+        const d = STYLES[id];
+        return {
+          label: d.label,
+          checked: id === current,
+          preview: {
+            fontFamily: DOC_FONT,
+            fontSize: Math.min(20, Math.max(12, d.size)) + 'px',
+            fontWeight: d.bold ? '700' : '400',
+            textTransform: d.uppercase ? 'uppercase' : 'none',
+            letterSpacing: d.letterSpacing ? d.letterSpacing + 'px' : 'normal',
+          },
+          onSelect: () => setBlockStyle(id),
+        };
+      });
+    },
+    'tb-style'
+  );
+  fmtRow.appendChild(ui.style.el);
+
+  fmtRow.appendChild(separator());
+
+  ui.bold = textButton('B', `Bold (${MOD}B)`, () => toggleInline('bold'), 'tb-b');
+  ui.italic = textButton('I', `Italic (${MOD}I)`, () => toggleInline('italic'), 'tb-i');
+  ui.underline = textButton(
+    'U',
+    `Underline (${MOD}U)`,
+    () => toggleInline('underline'),
+    'tb-u'
+  );
+  fmtRow.append(ui.bold, ui.italic, ui.underline);
+
+  fmtRow.appendChild(separator());
+
+  ui.page = menuButton('Margins', 'Page margins', () => {
+    const preset = marginPreset(doc.page);
+    return [
+      { heading: 'Margins' },
+      ...(Object.keys(MARGINS) as MarginKey[]).map((key) => ({
+        label: key === 'narrow' ? 'Narrow — 0.5 in' : 'Normal — 1 in',
+        checked: preset === key,
+        onSelect: () => setMarginPreset(key),
+      })),
+    ];
   });
-  ui.style = style;
-  bar.appendChild(style);
+  fmtRow.appendChild(ui.page.el);
 
-  bar.appendChild(sep());
+  fmtRow.appendChild(separator());
 
-  ui.bold = button('B', `Bold (${mod}+B)`, 'b', () => toggleInline('bold'));
-  ui.italic = button('I', `Italic (${mod}+I)`, 'i', () => toggleInline('italic'));
-  ui.underline = button('U', `Underline (${mod}+U)`, 'u', () =>
-    toggleInline('underline')
-  );
-  bar.appendChild(ui.bold);
-  bar.appendChild(ui.italic);
-  bar.appendChild(ui.underline);
-
-  bar.appendChild(sep());
-
-  const margin = document.createElement('select');
-  margin.title = 'Page margins';
-  for (const key of Object.keys(MARGINS) as MarginKey[]) {
-    const o = document.createElement('option');
-    o.value = key;
-    o.textContent =
-      key === 'narrow' ? 'Narrow margins (0.5in)' : 'Normal margins (1in)';
-    margin.appendChild(o);
-  }
-  margin.addEventListener('change', () => {
-    // Only the margins change; an imported page size is left alone.
-    doc.page = { ...doc.page, margins: uniformMargins(MARGINS[margin.value as MarginKey]) };
-    setPageSetup(doc.page);
-    reflowNow();
-    scheduleSave();
-  });
-  ui.margin = margin;
-  bar.appendChild(margin);
-
-  bar.appendChild(sep());
-
-  bar.appendChild(
-    button('Open .docx', 'Open a Word document', '', () => {
-      void pickDocx();
-    })
-  );
-  bar.appendChild(
-    button('Print / PDF', 'Print to PDF', '', () => {
-      void printDocument();
-    })
-  );
-  bar.appendChild(
-    button('.docx', 'Export as Word document', '', () => {
-      void exportWord();
-    })
-  );
-  bar.appendChild(
-    button('Export JSON', 'Download the document as JSON', '', () => {
-      syncModel();
-      download(
-        safeName(doc.title) + '.json',
-        new Blob([exportJson(doc)], { type: 'application/json' })
-      );
-    })
-  );
-  bar.appendChild(
-    button('Import JSON', 'Replace the document from a JSON file', '', () => {
-      void pickJson();
-    })
+  fmtRow.appendChild(
+    textButton('Print', `Print or save as PDF (${MOD}P)`, () => void printDocument())
   );
 
-  const spacer = document.createElement('span');
-  spacer.className = 'spacer';
-  bar.appendChild(spacer);
-
-  const status = document.createElement('span');
-  status.className = 'status';
-  ui.status = status;
-  bar.appendChild(status);
+  fmtRow.appendChild(spacer());
 }
 
-/* ------------------------------------------------------------------ *
- * Selection bookkeeping for toolbar widgets that steal focus
- * ------------------------------------------------------------------ */
-
-let stashed: Range | null = null;
-
-function saveSelection(): void {
-  const s = window.getSelection();
-  stashed = s && s.rangeCount ? s.getRangeAt(0).cloneRange() : null;
-}
-
-function restoreSelection(): void {
-  if (!stashed) return;
-  const s = window.getSelection();
-  if (!s) return;
-  docEl().focus();
-  s.removeAllRanges();
-  s.addRange(stashed);
+function setMarginPreset(key: MarginKey): void {
+  // Only the margins change; an imported page size is left alone.
+  doc.page = { ...doc.page, margins: uniformMargins(MARGINS[key]) };
+  setPageSetup(doc.page);
+  reflowNow();
+  scheduleSave();
 }
 
 /* ------------------------------------------------------------------ *
@@ -240,24 +248,67 @@ function syncModel(): void {
 
 function updateToolbar(): void {
   const st = currentStyle();
-  if (ui.style) ui.style.value = st ?? '';
+  ui.style?.setLabel(st ? STYLES[st].label : 'Mixed');
+
   const inline = inlineState();
   ui.bold?.classList.toggle('on', inline.bold);
   ui.italic?.classList.toggle('on', inline.italic);
   ui.underline?.classList.toggle('on', inline.underline);
+
   if (ui.undo) ui.undo.disabled = !canUndo();
   if (ui.redo) ui.redo.disabled = !canRedo();
-  if (ui.status) {
-    ui.status.classList.toggle('err', saveFailed);
-    ui.status.textContent = saveFailed
-      ? 'Save failed - storage full. Export JSON to keep your work.'
-      : `${pageCount()} page${pageCount() === 1 ? '' : 's'}`;
+
+  ui.page?.setLabel(
+    marginPreset(doc.page) === 'narrow'
+      ? 'Narrow margins'
+      : marginPreset(doc.page) === 'normal'
+        ? 'Normal margins'
+        : 'Custom margins'
+  );
+
+  if (ui.save) {
+    ui.save.classList.toggle('err', saveState === 'failed');
+    ui.save.textContent =
+      saveState === 'failed'
+        ? 'Not saved — storage full. Export to keep your work.'
+        : saveState === 'pending'
+          ? 'Saving…'
+          : 'All changes saved';
   }
+
+  updateCounts();
 }
+
+let countsTimer = 0;
+/**
+ * Page count is free, but the word count reads the whole document, so it is
+ * debounced rather than run on every keystroke.
+ */
+function updateCounts(): void {
+  if (!ui.counts) return;
+  const pages = pageCount();
+  const pageText = `${pages} page${pages === 1 ? '' : 's'}`;
+  ui.counts.textContent = pageText + (lastWords >= 0 ? ` · ${lastWords} words` : '');
+  clearTimeout(countsTimer);
+  countsTimer = window.setTimeout(() => {
+    const words = (docEl().textContent ?? '').match(/\S+/g)?.length ?? 0;
+    if (words !== lastWords) {
+      lastWords = words;
+      if (ui.counts) {
+        ui.counts.textContent = `${pageCount()} page${pageCount() === 1 ? '' : 's'} · ${words} words`;
+      }
+    }
+  }, 400);
+}
+let lastWords = -1;
 
 let saveTimer = 0;
 function scheduleSave(): void {
   clearTimeout(saveTimer);
+  if (saveState !== 'failed') {
+    saveState = 'pending';
+    updateToolbar();
+  }
   saveTimer = window.setTimeout(() => {
     syncModel();
     save(doc);
@@ -403,8 +454,11 @@ async function pickJson(): Promise<void> {
 function openDoc(d: Doc): void {
   doc = d;
   setPageSetup(d.page);
-  if (ui.margin) ui.margin.value = marginPreset(d.page) ?? '';
-  if (ui.title) ui.title.value = d.title;
+  if (ui.title) {
+    ui.title.value = d.title;
+    sizeTitle(ui.title);
+  }
+  lastWords = -1;
   renderAll(doc, docEl());
   normalize();
   ensureTrailingBlock();
@@ -476,6 +530,7 @@ function boot(): void {
   bindPaste(root);
 
   root.addEventListener('input', () => {
+    closeMenu();
     normalize();
     if (ensureTrailingBlock()) paginate();
     paginateIfNeeded(); // synchronous, before paint
@@ -494,7 +549,7 @@ function boot(): void {
   });
 
   document.addEventListener('wp:saved', (e) => {
-    saveFailed = !(e as CustomEvent).detail?.ok;
+    saveState = (e as CustomEvent).detail?.ok ? 'saved' : 'failed';
     updateToolbar();
   });
 

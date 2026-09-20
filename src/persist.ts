@@ -77,6 +77,12 @@ function coerce(raw: unknown): Doc {
       id: typeof rb.id === 'string' && rb.id ? rb.id : newId(),
       styleId: rb.styleId,
       html: typeof rb.html === 'string' ? rb.html : '',
+      // Markers resolved from an imported numbering definition are part of
+      // the document, not of the render, so they have to survive a reload.
+      ...(typeof rb.listMarker === 'string' ? { listMarker: rb.listMarker } : {}),
+      ...(typeof rb.listLevel === 'number' && rb.listLevel > 0
+        ? { listLevel: rb.listLevel }
+        : {}),
     };
   });
 

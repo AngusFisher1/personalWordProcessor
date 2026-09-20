@@ -22,6 +22,28 @@ lazily and only when you export). No framework: React's virtual DOM fights the
 direct node manipulation that is the core of this app. No rich-text library —
 writing the pagination layer is the point of the project.
 
+## The toolbar
+
+Two rows. The top one is about the file - its name, whether it is saved, and
+how big it is. The bottom one is about the text.
+
+File operations live in a **File** menu rather than as five sibling buttons,
+because "Open .docx", ".docx", "Export JSON" and "Import JSON" sitting side by
+side reads as four unrelated things when two of them are a matched pair. The
+paragraph style menu previews each style **in that style**, so the list shows
+what the styles look like rather than only what they are called.
+
+Every control calls `preventDefault` on mousedown and never takes focus. A
+toolbar that takes focus destroys the document selection, and then Bold has
+nothing to apply itself to. Doing this consistently is what let the earlier
+save-the-selection-and-put-it-back-afterwards workaround be deleted: with
+custom menus instead of a native `<select>`, the caret simply never moves.
+
+The bar does not reflow onto a second row as the window narrows. The document
+name and save message give up space first; Print is the only control that can
+be pushed out of sight, and it is also in the File menu, so nothing becomes
+unreachable.
+
 ## Geometry
 
 All geometry is in CSS pixels at 96px per inch, and the numbers are exact.
@@ -38,7 +60,8 @@ All geometry is in CSS pixels at 96px per inch, and the numbers are exact.
 
 | File | Role |
 |---|---|
-| `main.ts` | entry, toolbar, event wiring, autosave |
+| `main.ts` | entry, toolbar composition, event wiring, autosave |
+| `ui.ts` | toolbar widgets: buttons and dropdown menus |
 | `model.ts` | `Block`, `Doc`, geometry constants, id generation |
 | `styles.ts` | the six named styles; emitted as `.s-<StyleId>` CSS at startup |
 | `render.ts` | model → DOM, DOM → model, the inline sanitizer |

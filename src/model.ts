@@ -247,6 +247,49 @@ export function hfFor(
   return set[variant] ?? set.default ?? [];
 }
 
+/**
+ * The readable text of a block's inline markup.
+ *
+ * Stripping the tags is only half of it: the markup holds `&amp;` and
+ * `&rsquo;`, and anything that shows this text to a person - the outline, a
+ * document title, a word count - has to decode them too. Leaving that out
+ * puts a literal "&amp;" in the sidebar next to a paragraph that renders a
+ * perfectly good ampersand.
+ */
+const ENTITIES: Record<string, string> = {
+  amp: '&',
+  lt: '<',
+  gt: '>',
+  quot: '"',
+  apos: "'",
+  nbsp: ' ',
+  rsquo: '’',
+  lsquo: '‘',
+  rdquo: '”',
+  ldquo: '“',
+  ndash: '–',
+  mdash: '—',
+  hellip: '…',
+};
+
+export function decodeEntities(s: string): string {
+  return s.replace(/&(#x?[0-9a-f]+|[a-z]+);/gi, (whole, body: string) => {
+    if (body[0] === '#') {
+      const code =
+        body[1] === 'x' || body[1] === 'X'
+          ? parseInt(body.slice(2), 16)
+          : parseInt(body.slice(1), 10);
+      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : whole;
+    }
+    // Ampersand last, so "&amp;lt;" decodes to "&lt;" and not to "<".
+    return ENTITIES[body.toLowerCase()] ?? whole;
+  });
+}
+
+export function plainText(html: string): string {
+  return decodeEntities(html.replace(/<[^>]*>/g, ''));
+}
+
 export function isTable(b: Block): b is TableBlock {
   return (b as TableBlock).kind === 'table';
 }

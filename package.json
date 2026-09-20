@@ -17,7 +17,8 @@
     "test:image": "npm run build:harness && node test/image.test.mjs",
     "test:header": "npm run build:harness && node test/header.test.mjs",
     "test:text": "npm run build:harness && node test/text.test.mjs",
-    "test:section": "npm run build:harness && node test/section.test.mjs"
+    "test:section": "npm run build:harness && node test/section.test.mjs",
+    "screenshots": "node docs/screenshots.mjs"
   },
   "devDependencies": {
     "@xmldom/xmldom": "^0.9.12",

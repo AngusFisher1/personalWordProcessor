@@ -5,6 +5,7 @@ Text flows from page to page as you type, and printing produces a PDF that match
 the screen one to one. Local-first, keyboard-driven, no cloud, no account, no ribbon.
 
 ![Recto — the editing view](docs/screenshots/01-editing.png)
+<sub>The bottom of page one, the break, and the top of page two — with the running header repeated. Every screenshot here is a capture of the running application; the document in them is invented.</sub>
 
 The browser has no native concept of a page. Pagination is implemented here by
 measuring content and moving DOM nodes between fixed-height page containers.
@@ -15,6 +16,12 @@ npm run dev
 ```
 
 `npm run build` type-checks and bundles to `dist/`.
+
+The screenshots in this file are captured from the running app by
+`npm run screenshots` (see [docs/screenshots.mjs](docs/screenshots.mjs)),
+which drives it in a real browser against an invented document. They were
+mockups once, and mockups drift — the first set showed a library with folders
+and a preview pane that this program has never had.
 
 ## Contents
 
@@ -65,7 +72,7 @@ nothing to apply itself to.
 ### The command palette
 
 ![Command palette](docs/screenshots/03-command-palette.png)
-<sub>The command palette over a dimmed workspace. Matching is a scored subsequence, so `exh` finds Export HTML.</sub>
+<sub>Two letters into `ex`. Matching is a scored subsequence — every letter in order, word-initial letters worth more — so `exh` would narrow this to Export HTML alone.</sub>
 
 
 `Cmd/Ctrl+K`. Every command in the program, reachable by typing part of its
@@ -108,7 +115,7 @@ that measures a millisecond late.
 ### The export sheet
 
 ![Export sheet](docs/screenshots/07-export.png)
-<sub>Every format costs something different, and the sheet says so at the moment of choosing.</sub>
+<sub>Every format costs something different, and the sheet says so at the moment of choosing. The Word line reads differently for a document that came from a .docx and still has its original package.</sub>
 
 
 `Cmd/Ctrl+E`. A menu of file formats tells you what you can produce; it does
@@ -131,7 +138,7 @@ has no original would be a lie told at exactly the wrong moment.
 ### The library
 
 ![Document library](docs/screenshots/04-library.png)
-<sub>Type-to-filter, a recency fade down the list, and a real page preview rather than an icon.</sub>
+<sub>The FILES tab: type-to-filter, a recency fade down the list, page and word counts kept in the index so nothing has to be loaded to list it, and the one command that gets everything out.</sub>
 
 
 The rail's FILES tab lists every document, newest first, with a type-to-filter
@@ -457,7 +464,7 @@ repair the file. Cell selection spanning multiple cells is out of scope.
 ### Sections
 
 ![Header and footer editing](docs/screenshots/06-header-footer.png)
-<sub>Header and footer editing: the body drops to 16%, the margin rules show, and the controls stay in the gutter.</sub>
+<sub>Header and footer editing. The body drops to 16% rather than locking, so the page still reads as a page, and the editable region is outlined in the accent. Esc returns to the body.</sub>
 
 
 A Word document is a sequence of sections, each with its own page size,
@@ -614,7 +621,7 @@ Notes:
 ## Storage
 
 ![Empty state](docs/screenshots/08-empty.png)
-<sub>A new document: one page, one caret, four keys.</sub>
+<sub>A new document: one page, one caret, and an outline waiting for its first heading. Nothing has been loaded from anywhere.</sub>
 
 
 Autosaves to `localStorage` on a 1s debounce under `wp:doc:<id>`, with an index

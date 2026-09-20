@@ -15,7 +15,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 class Q extends DOMParser { constructor() { super({ onError: () => {} }); } }
 globalThis.DOMParser = Q; globalThis.XMLSerializer = XMLSerializer;
-const { importDocx, toMarkdown, toHtml, fromMarkdown } = await import('./build/harness.mjs');
+const { importDocx, toMarkdown, toHtml, fromMarkdown, plainText } =
+  await import('./build/harness.mjs');
 const HERE = dirname(fileURLToPath(import.meta.url));
 
 let failures = 0;
@@ -221,6 +222,25 @@ console.log('\nan image with no resolver is reported, not linked');
 
   const resolved = toMarkdown(doc, (p) => 'media/' + p.split('/').pop());
   check('a resolver is used when given', resolved.includes('](media/image1.png)'), resolved.trim());
+}
+
+/* ------------------------------------------------------------------ */
+console.log('\nplain text decodes entities as well as stripping tags');
+{
+  // The outline, a document title and a word count all show this text to a
+  // person. Stripping the tags without decoding puts a literal "&amp;" in
+  // the sidebar beside a paragraph that renders a perfectly good ampersand.
+  check('an ampersand decodes', plainText('Kestrel &amp; Moss') === 'Kestrel & Moss');
+  check('a curly quote decodes', plainText('the company&rsquo;s') === 'the company’s');
+  check('tags go first', plainText('<b>Skills</b> &amp; <i>Tools</i>') === 'Skills & Tools');
+  check('a numeric entity decodes', plainText('caf&#233; &#x2014; bar') === 'café — bar');
+  check(
+    'ampersand is not decoded twice',
+    plainText('a &amp;lt; b') === 'a &lt; b',
+    plainText('a &amp;lt; b')
+  );
+  check('an unknown entity is left alone', plainText('&notareal; x') === '&notareal; x');
+  check('no markup and no entities is a no-op', plainText('plain words') === 'plain words');
 }
 
 console.log(failures === 0 ? '\nall text-format checks passed' : `\n${failures} failed`);

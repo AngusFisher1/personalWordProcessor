@@ -1,5 +1,5 @@
 import type { Block, Doc, ParagraphBlock, StyleId, TableBlock } from './model';
-import { isTable, newBlock, newId, pageSetup } from './model';
+import { isTable, newBlock, newId, pageSetup, plainText } from './model';
 
 /**
  * Markdown in.
@@ -261,7 +261,7 @@ export function fromMarkdown(text: string, opts: MarkdownOptions = {}): Doc {
 function firstHeading(blocks: Block[]): string | null {
   const first = blocks[0];
   if (!first || isTable(first) || first.styleId !== 'Name') return null;
-  const text = first.html.replace(/<[^>]*>/g, '').trim();
+  const text = plainText(first.html).trim();
   return text === '' ? null : text;
 }
 

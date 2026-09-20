@@ -1,6 +1,6 @@
 import type { Doc } from './model';
 import type { PageSetup } from './model';
-import { contentHeight, contentWidth, isTable, sectionsOf } from './model';
+import { contentHeight, contentWidth, isTable, plainText, sectionsOf } from './model';
 import { docEl, pages } from './render';
 import { styleOf } from './styles';
 import { currentPageSetup, pageCount } from './paginate';
@@ -389,7 +389,7 @@ export function updateOutline(doc: Doc, activeId: string | null): void {
   for (const b of doc.blocks) {
     if (isTable(b)) continue;
     if (b.styleId !== 'SectionHeading' && b.styleId !== 'JobTitle') continue;
-    const text = b.html.replace(/<[^>]*>/g, '').trim();
+    const text = plainText(b.html).trim();
     if (!text) continue;
     entries.push({ id: b.id, text, sub: b.styleId === 'JobTitle' });
   }

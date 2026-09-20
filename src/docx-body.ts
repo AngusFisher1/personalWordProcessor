@@ -1,5 +1,5 @@
 import type { Block, Doc, ParagraphBlock, TableBlock } from './model';
-import { isTable, sectionsOf } from './model';
+import { isTable, plainText, sectionsOf } from './model';
 import type { RunProp, Vault } from './docx-package';
 import { addWarning } from './docx-package';
 
@@ -58,14 +58,15 @@ export function parseInline(html: string): Element | null {
   }
 }
 
+/**
+ * Text with the markup and the entities both gone.
+ *
+ * One shared implementation, because decoding in several passes gets the
+ * order wrong: unescaping `&amp;` before `&lt;` turns the literal text
+ * "&lt;" into a "<" that was never written.
+ */
 export function stripTags(html: string): string {
-  return html
-    .replace(/<[^>]*>/g, '')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&nbsp;/g, '\u00a0')
-    .replace(/&quot;/g, '"')
-    .replace(/&amp;/g, '&');
+  return plainText(html);
 }
 
 /**

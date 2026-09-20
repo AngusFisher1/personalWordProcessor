@@ -63,6 +63,11 @@ export interface Vault {
   styleBack: Map<string, string>;
   /** Hyperlink target back to its relationship id, so links survive an edit. */
   relByTarget: Map<string, string>;
+  /**
+   * Whole runs kept verbatim under a token, for content we render but cannot
+   * regenerate - an image, whose w:drawing carries far more than a src.
+   */
+  runXml: Map<string, string>;
   /** Per table: its w:tblPr and w:tblGrid, so an edited table keeps them. */
   tablePr: Map<string, { tblPr: string; tblGrid: string }>;
   /** Per row id: its w:trPr. */
@@ -87,6 +92,7 @@ export function emptyVault(): Vault {
     blockStyle: new Map(),
     styleBack: new Map(),
     relByTarget: new Map(),
+    runXml: new Map(),
     tablePr: new Map(),
     rowPr: new Map(),
     cellPr: new Map(),

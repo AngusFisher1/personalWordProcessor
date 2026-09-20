@@ -274,6 +274,25 @@ const TABLE_CSS =
   '.blk-table td.merged { border-left: 0; }\n' +
   '.blk-table .blk:last-child { padding-bottom: 0; }\n';
 
+/**
+ * Inline images. Capped to the text column so an oversized picture cannot
+ * push past the margin, and vertical-align keeps the line box honest so
+ * measurement sees the height the image actually occupies.
+ */
+const IMAGE_CSS =
+  '.blk img {\n' +
+  '  max-width: 100%;\n' +
+  '  height: auto;\n' +
+  '  vertical-align: bottom;\n' +
+  '}\n' +
+  '.blk img.img-missing {\n' +
+  '  display: inline-block;\n' +
+  '  min-width: 32px;\n' +
+  '  min-height: 32px;\n' +
+  '  background: repeating-linear-gradient(45deg, #eee, #eee 6px, #e0e0e0 6px, #e0e0e0 12px);\n' +
+  '  outline: 1px solid #ccc;\n' +
+  '}\n';
+
 const SPLIT_CSS =
   '.blk.split-cont { padding-top: 0; text-indent: 0; }\n' +
   '.blk.split-cont::before { content: none; }\n' +
@@ -290,6 +309,7 @@ export function injectStyleSheet(): void {
     STYLE_IDS.map((s) => css(STYLES[s])).join('') +
     LIST_CSS +
     TABLE_CSS +
+    IMAGE_CSS +
     SPLIT_CSS;
   document.head.appendChild(el);
 }

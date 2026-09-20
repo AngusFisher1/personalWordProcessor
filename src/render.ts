@@ -7,6 +7,7 @@ import type {
   TableCell,
 } from './model';
 import { isTable, newId } from './model';
+import { mediaUrl } from './media';
 import { styleClass, styleOf } from './styles';
 
 /* ------------------------------------------------------------------ *
@@ -58,6 +59,27 @@ export function makeBlockEl(b: ParagraphBlock): HTMLElement {
  *  are stored as '' in the model. */
 export function setBlockHtml(el: HTMLElement, html: string): void {
   el.innerHTML = html.trim() === '' ? '<br>' : html;
+  resolveImages(el);
+}
+
+/**
+ * Give every image a src from the media registry. The model stores the part
+ * path, not the bytes, so this is what turns a reference into a picture.
+ */
+export function resolveImages(root: HTMLElement): void {
+  for (const img of Array.from(root.querySelectorAll('img[data-media]'))) {
+    const el = img as HTMLImageElement;
+    const url = mediaUrl(el.dataset.media as string);
+    if (url) {
+      el.src = url;
+    } else {
+      // The part is missing or is a format the browser cannot draw. Leave a
+      // box of the right size so the layout does not jump.
+      el.removeAttribute('src');
+      el.classList.add('img-missing');
+    }
+    el.draggable = false;
+  }
 }
 
 export function applyStyle(el: HTMLElement, styleId: StyleId): void {
@@ -385,7 +407,7 @@ function mergedHtml(g: Group): string {
 }
 
 export function readBlockHtml(el: HTMLElement): string {
-  const html = sanitizeInlineHtml(el.innerHTML);
+  const html = sanitizeInlineHtml(el.innerHTML, { allowImages: true });
   return html === '<br>' ? '' : html;
 }
 
@@ -448,8 +470,17 @@ const TAG_EMPHASIS: Record<string, Emph> = {
   U: 'u', INS: 'u',
 };
 
+export interface CleanOptions {
+  /**
+   * Keep <img> elements. True when reading our own content back, false on
+   * paste - a pasted image would arrive as a remote URL or a data blob we
+   * have nowhere to put.
+   */
+  allowImages?: boolean;
+}
+
 /** Normalizes a subtree in place down to b/i/u/a/br plus text. */
-export function cleanInline(parent: Node): void {
+export function cleanInline(parent: Node, opts: CleanOptions = {}): void {
   for (const n of Array.from(parent.childNodes)) {
     if (n.nodeType === Node.TEXT_NODE) continue;
     if (n.nodeType !== Node.ELEMENT_NODE) {
@@ -459,6 +490,20 @@ export function cleanInline(parent: Node): void {
     const el = n as HTMLElement;
     const tag = el.tagName;
 
+    if (tag === 'IMG' && opts.allowImages) {
+      // An image is described by which part it draws and which preserved run
+      // writes it back. The resolved src is a render-time detail.
+      for (const a of Array.from(el.attributes)) {
+        const keep =
+          a.name === 'data-media' ||
+          a.name === 'data-run' ||
+          a.name === 'width' ||
+          a.name === 'height' ||
+          a.name === 'alt';
+        if (!keep) el.removeAttribute(a.name);
+      }
+      continue;
+    }
     if (DROP.has(tag)) {
       parent.removeChild(el);
       continue;
@@ -482,7 +527,7 @@ export function cleanInline(parent: Node): void {
         ? el.getAttribute('href')
         : null;
 
-    cleanInline(el);
+    cleanInline(el, opts);
 
     // Rebuild as nested b/i/u (inside an <a> when there is a link), so that
     // emphasis survives whether it arrived as a tag or as a style.
@@ -504,9 +549,9 @@ export function cleanInline(parent: Node): void {
   }
 }
 
-export function sanitizeInlineHtml(html: string): string {
+export function sanitizeInlineHtml(html: string, opts: CleanOptions = {}): string {
   const t = document.createElement('template');
   t.innerHTML = html;
-  cleanInline(t.content);
+  cleanInline(t.content, opts);
   return t.innerHTML;
 }

@@ -15,6 +15,7 @@ import {
   AlignmentType,
   BorderStyle,
   Document,
+  ImageRun,
   ExternalHyperlink,
   Footer,
   Header,
@@ -31,12 +32,61 @@ import {
   WidthType,
 } from 'docx';
 import JSZip from 'jszip';
+import { deflateSync } from 'node:zlib';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, 'corpus');
+
+/* A real PNG, built here so the corpus needs no binary fixtures in git. */
+function crc32(buf) {
+  let c, table = [];
+  for (let n = 0; n < 256; n++) {
+    c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  let crc = 0xffffffff;
+  for (const b of buf) crc = table[(crc ^ b) & 0xff] ^ (crc >>> 8);
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function chunk(type, data) {
+  const len = Buffer.alloc(4);
+  len.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4);
+  crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([len, body, crc]);
+}
+
+function makePng(w, h, rgb) {
+  const raw = Buffer.alloc((w * 3 + 1) * h);
+  let o = 0;
+  for (let y = 0; y < h; y++) {
+    raw[o++] = 0; // filter: none
+    for (let x = 0; x < w; x++) {
+      // A visible diagonal so the picture is obviously a picture.
+      const on = (x + y) % 24 < 12;
+      raw[o++] = on ? rgb[0] : 255;
+      raw[o++] = on ? rgb[1] : 255;
+      raw[o++] = on ? rgb[2] : 255;
+    }
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(w, 0);
+  ihdr.writeUInt32BE(h, 4);
+  ihdr[8] = 8;  // bit depth
+  ihdr[9] = 2;  // colour type: truecolour
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    chunk('IHDR', ihdr),
+    chunk('IDAT', deflateSync(raw)),
+    chunk('IEND', Buffer.alloc(0)),
+  ]);
+}
 
 const lorem =
   'This paragraph exists to occupy a realistic amount of space on the page so that pagination has something to do. ';
@@ -291,6 +341,40 @@ async function links() {
   );
 }
 
+/* ---------------- 8b. a document with pictures ---------------- */
+async function withImages() {
+  const logo = makePng(160, 90, [217, 123, 60]);
+  const figure = makePng(320, 180, [76, 111, 227]);
+  await save(
+    'images.docx',
+    new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph({
+              children: [new ImageRun({ data: logo, type: 'png', transformation: { width: 120, height: 68 } })],
+            }),
+            new Paragraph({ text: 'Illustrated Report', heading: HeadingLevel.TITLE }),
+            para(lorem.repeat(3)),
+            new Paragraph({
+              children: [new ImageRun({ data: figure, type: 'png', transformation: { width: 320, height: 180 } })],
+            }),
+            para('Figure 1. A caption beneath the figure.'),
+            para(lorem.repeat(4)),
+            new Paragraph({
+              children: [
+                new TextRun('An image can also sit '),
+                new ImageRun({ data: logo, type: 'png', transformation: { width: 36, height: 20 } }),
+                new TextRun(' inside a sentence.'),
+              ],
+            }),
+          ],
+        },
+      ],
+    })
+  );
+}
+
 /* ---------------- 9. a directly formatted resume ----------------------------
  * The shape real documents actually have: no named styles anywhere, headings
  * made out of bold, capitals, size and a rule. This is the case the style
@@ -430,6 +514,7 @@ await landscape();
 await legal();
 await letterhead();
 await links();
+await withImages();
 await directResume();
 await trackedChanges();
 console.log('Done. Add real .docx files to test/corpus/ - the harness picks them up.');

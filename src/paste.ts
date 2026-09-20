@@ -77,7 +77,7 @@ function styleForTag(el: Element, ctx: Ctx): StyleId {
 function inlineHtmlOf(nodes: Node[]): string {
   const t = document.createElement('template');
   for (const n of nodes) t.content.appendChild(n.cloneNode(true));
-  cleanInline(t.content);
+  cleanInline(t.content); // images are dropped on paste in v1
   // Word and Google Docs both paste runs of spaces and non-breaking spaces
   // liberally, and they break the bullet hanging indent.
   const walker = document.createTreeWalker(t.content, NodeFilter.SHOW_TEXT);

@@ -19,6 +19,7 @@ import {
 } from './docx-package';
 import type { ParaSignals } from './docx-infer';
 import { inferStyles, looksLikeContact } from './docx-infer';
+import { registerMedia } from './media';
 
 /**
  * Parse OOXML directly rather than converting through HTML.
@@ -109,11 +110,69 @@ interface Fmt {
 
 type Piece =
   | ({ t: 'text'; text: string; href: string | null } & Fmt)
-  | { t: 'br' };
+  | { t: 'br' }
+  | { t: 'img'; media: string; run: string; w: number; h: number };
 
 interface Ctx {
   rels: Map<string, string>;
   vault: Vault;
+  /** Serializes an element without repeating the root's namespaces. */
+  serialize: (el: Element) => string;
+  imageCount: number;
+}
+
+/** 914400 EMU to the inch, 96 CSS pixels to the inch. */
+const EMU_PER_PX = 9525;
+
+function descendant(el: Element, name: string): Element | null {
+  if (el.localName === name) return el;
+  const all = el.getElementsByTagName('*');
+  for (let i = 0; i < all.length; i++) {
+    if ((all[i] as Element).localName === name) return all[i] as Element;
+  }
+  return null;
+}
+
+/**
+ * An inline picture. Both the modern w:drawing and the older w:pict carry a
+ * relationship id pointing at a part under word/media, plus a size - in EMU
+ * for a drawing, in CSS-ish units in a VML style attribute for a pict.
+ */
+function readImage(run: Element, holder: Element, ctx: Ctx): Piece | null {
+  const blip = descendant(holder, 'blip') ?? descendant(holder, 'imagedata');
+  if (!blip) return null;
+  const rid = rAttr(blip, 'embed') ?? rAttr(blip, 'id');
+  if (!rid) return null;
+  const target = ctx.rels.get(rid);
+  if (!target) return null;
+
+  // Relationship targets are relative to the part's own folder.
+  const media = target.startsWith('/')
+    ? target.slice(1)
+    : 'word/' + target.replace(/^\.\//, '');
+
+  let w = 0;
+  let h = 0;
+  const extent = descendant(holder, 'extent');
+  if (extent) {
+    w = Math.round(intOf(wAttr(extent, 'cx'), 0) / EMU_PER_PX);
+    h = Math.round(intOf(wAttr(extent, 'cy'), 0) / EMU_PER_PX);
+  } else {
+    const shape = descendant(holder, 'shape');
+    const style = shape?.getAttribute('style') ?? '';
+    const num = (prop: string) => {
+      const m = style.match(new RegExp(prop + ':([\d.]+)pt'));
+      return m ? Math.round(parseFloat(m[1]) * (96 / 72)) : 0;
+    };
+    w = num('width');
+    h = num('height');
+  }
+
+  const token = 'img' + ctx.imageCount++;
+  // The whole run goes into the vault: a w:drawing carries cropping, effects
+  // and positioning we render none of but must not throw away.
+  ctx.vault.runXml.set(token, ctx.serialize(run));
+  return { t: 'img', media, run: token, w, h };
 }
 
 function uOn(el: Element | null): boolean {
@@ -146,9 +205,14 @@ function emitRun(r: Element, fmt: Fmt, href: string | null, out: Piece[], ctx: C
         break;
       case 'drawing':
       case 'pict':
-      case 'object':
-        addWarning(ctx.vault, 'images', 'Images are preserved but not shown');
+      case 'object': {
+        const img = readImage(r, c, ctx);
+        if (img) out.push(img);
+        else {
+          addWarning(ctx.vault, 'images', 'Some images are preserved but not shown');
+        }
         break;
+      }
       case 'delText':
         break; // deleted text is not part of the current document
       default:
@@ -222,6 +286,16 @@ function piecesToHtml(pieces: Piece[]): string {
   for (const p of merged) {
     if (p.t === 'br') {
       html += '<br>';
+      continue;
+    }
+    if (p.t === 'img') {
+      // data-media says which part to draw; data-run says which preserved
+      // run to write back. No src: a blob URL would not survive a reload.
+      html +=
+        `<img data-media="${escapeAttr(p.media)}" data-run="${escapeAttr(p.run)}"` +
+        (p.w ? ` width="${p.w}"` : '') +
+        (p.h ? ` height="${p.h}"` : '') +
+        '>';
       continue;
     }
     if (p.text === '') continue;
@@ -649,7 +723,8 @@ export async function importDocx(
   for (const [id, target] of rels) {
     if (!vault.relByTarget.has(target)) vault.relByTarget.set(target, id);
   }
-  const ctx: Ctx = { rels, vault };
+  const ctx: Ctx = { rels, vault, serialize, imageCount: 0 };
+  registerMedia(parts);
   const counters = new ListCounters();
   const page = readSectPr(kid(body, 'sectPr'));
 

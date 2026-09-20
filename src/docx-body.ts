@@ -38,9 +38,15 @@ const TEXT_NODE = 3;
  * browser, which is what lets the round-trip harness run in plain Node.
  */
 export function parseInline(html: string): Element | null {
+  // Void elements have to be closed for an XML parser. Missing one here does
+  // not fail loudly: the parse fails, the fallback emits the text alone, and
+  // the element - an image, say - is silently gone from the export.
   const xml =
     '<x>' +
-    html.replace(/<br\s*\/?>/gi, '<br/>').replace(/&nbsp;/g, '\u00a0') +
+    html
+      .replace(/<br\s*\/?>/gi, '<br/>')
+      .replace(/<img\b([^>]*?)\/?>/gi, '<img$1/>')
+      .replace(/&nbsp;/g, '\u00a0') +
     '</x>';
   try {
     const doc = new DOMParser().parseFromString(xml, 'application/xml');
@@ -121,6 +127,16 @@ function runsXml(html: string, vault: Vault, base?: RunProp[]): string {
         case 'BR':
           out += '<w:r><w:br/></w:r>';
           break;
+        case 'IMG': {
+          // Write the original run back untouched. A w:drawing carries
+          // cropping, effects and positioning that cannot be rebuilt from
+          // an <img>, so regenerating one would quietly degrade it.
+          const tok = el.getAttribute('data-run');
+          const kept = tok ? vault.runXml.get(tok) : undefined;
+          if (kept) out += kept;
+          else addWarning(vault, 'images', 'An image could not be written back');
+          break;
+        }
         case 'B':
           walk(el, { ...f, b: true }, href);
           break;

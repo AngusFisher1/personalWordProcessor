@@ -26,7 +26,34 @@ export interface StyleDef {
   /** px hanging indent; 0 for none. */
   hanging: number;
   bullet: boolean;
+
+  /* --- paragraph properties, mirroring Word's --- */
+
+  /** Never separated from the block below it by a page break. */
+  keepWithNext: boolean;
+  /** Never split across a page boundary at all. */
+  keepLines: boolean;
+  /** Minimum lines left at the bottom of a page when splitting. */
+  orphanMin: number;
+  /** Minimum lines carried to the next page when splitting. */
+  widowMin: number;
+  /** Always starts a new page. */
+  pageBreakBefore: boolean;
 }
+
+export type ParagraphProps = Pick<
+  StyleDef,
+  'keepWithNext' | 'keepLines' | 'orphanMin' | 'widowMin' | 'pageBreakBefore'
+>;
+
+/** Applied to every style unless it overrides them. */
+const PARAGRAPH_DEFAULTS: ParagraphProps = {
+  keepWithNext: false,
+  keepLines: false,
+  orphanMin: 2,
+  widowMin: 2,
+  pageBreakBefore: false,
+} as const;
 
 // Deliberately not a web font: a local stack means there is no font-load race
 // to correct pagination for, and print matches screen on the first paint.
@@ -37,7 +64,7 @@ export const DOCX_FONT = 'Calibri';
 export const INK = '#111111';
 export const RULE_COLOR = '#999999';
 
-export const STYLES: Record<StyleId, StyleDef> = {
+const BASE: Record<StyleId, Omit<StyleDef, keyof ParagraphProps>> = {
   Name: {
     id: 'Name',
     label: 'Name',
@@ -124,6 +151,24 @@ export const STYLES: Record<StyleId, StyleDef> = {
   },
 };
 
+/** Per-style overrides of the paragraph defaults. */
+const PARAGRAPH_OVERRIDES: Partial<Record<StyleId, Partial<ParagraphProps>>> = {
+  // A heading left as the last line on a page is the most visible pagination
+  // failure there is, so headings travel with the block beneath them.
+  SectionHeading: { keepWithNext: true, keepLines: true },
+  JobTitle: { keepWithNext: true, keepLines: true },
+  // A name or a contact line split across a page break is never right.
+  Name: { keepWithNext: true, keepLines: true },
+  Contact: { keepLines: true },
+};
+
+export const STYLES: Record<StyleId, StyleDef> = Object.fromEntries(
+  STYLE_IDS.map((id) => [
+    id,
+    { ...PARAGRAPH_DEFAULTS, ...BASE[id], ...(PARAGRAPH_OVERRIDES[id] ?? {}) },
+  ])
+) as Record<StyleId, StyleDef>;
+
 export function styleDef(id: StyleId): StyleDef {
   return STYLES[id];
 }
@@ -166,6 +211,20 @@ function css(d: StyleDef): string {
   return out;
 }
 
+/**
+ * A paragraph split across a page boundary renders as several elements. The
+ * continuation must not repeat the top padding, the hanging indent or the list
+ * marker, and every piece but the last must drop its bottom padding and rule -
+ * otherwise a paragraph grows a little taller each time it is split.
+ *
+ * These come last in the sheet so they beat the `.s-*` rules at equal
+ * specificity.
+ */
+const SPLIT_CSS =
+  '.blk.split-cont { padding-top: 0; text-indent: 0; }\n' +
+  '.blk.split-cont::before { content: none; }\n' +
+  '.blk.split-more { padding-bottom: 0; border-bottom: none; }\n';
+
 /** Inject the `.s-*` rules. Called once at startup, before first measurement. */
 export function injectStyleSheet(): void {
   const id = 'wp-named-styles';
@@ -174,6 +233,7 @@ export function injectStyleSheet(): void {
   el.id = id;
   el.textContent =
     `.blk { font-family: ${DOC_FONT}; color: ${INK}; }\n` +
-    STYLE_IDS.map((s) => css(STYLES[s])).join('');
+    STYLE_IDS.map((s) => css(STYLES[s])).join('') +
+    SPLIT_CSS;
   document.head.appendChild(el);
 }

@@ -111,6 +111,57 @@ removes it, hoists blocks the browser nested inside other blocks, and mints ids
 for blocks a clone stripped them from. Select-all-and-delete destroys the page
 elements outright, and normalize rebuilds them.
 
+### Line-level splitting
+
+A paragraph that does not fit the remaining space is split at a line boundary
+rather than moved whole, so pages fill to the bottom margin.
+
+The split point comes from `Range.getClientRects()`, which yields one rect per
+text fragment; those are merged by vertical overlap into lines. Those rects are
+**ink** boxes - the glyph extent, about 13px for 11px text - not line boxes, so
+they are used only to count and locate lines. Heights come from the used line
+box height, derived by dividing the block's content height by its line count.
+Measuring from the ink boxes instead makes every split piece render a couple of
+pixels taller than predicted, which is enough to overflow a page.
+
+The character offset where a line begins is found by binary search:
+`lineOfPrefix` is non-decreasing in the offset, so the first offset whose prefix
+reaches line L is one past that line's first character. About ten range
+measurements per split.
+
+The rendered pieces are a **render artifact**. The first piece keeps the logical
+block's id; continuations carry `data-continues-from` and `data-base`, the
+character offset where the piece starts in the merged text. `readModel` folds
+them back, so the stored document always has one block per paragraph and
+persistence, export, undo and .docx know nothing about splitting. The caret is
+likewise logical - block id plus offset into the merged text - which is what
+lets a position survive being re-split at a different point while typing.
+
+Pagination folds every paragraph back into one element before measuring and
+re-splits afterwards. Because the head keeps its element identity and only
+continuations are created and destroyed, the caret's own element normally
+survives a reflow untouched, so focus and IME composition are not disturbed.
+
+Per-style paragraph properties mirror Word's:
+
+| Property | Default | Meaning |
+|---|---|---|
+| `keepWithNext` | on for Name, SectionHeading, JobTitle | never separated from the block below |
+| `keepLines` | off (on for the heading styles) | never split at all |
+| `orphanMin` / `widowMin` | 2 | minimum lines either side of a split |
+| `pageBreakBefore` | off | always starts a page |
+
+Two details that are easy to get wrong:
+
+- When the maximum number of lines that fit would leave a widow, the split
+  **backs off** to the latest legal line rather than abandoning the split. Not
+  doing that leaves several lines of avoidable whitespace at the foot of a page.
+- Each page records `data-needh`: exactly how much room would have to reopen
+  before the layout could change. That is what the cheap per-keystroke check
+  compares against. Getting it wrong in the keep-with-next case - where blocks
+  are dragged off a page after its budget was computed - makes every keystroke
+  trigger a reflow that rebuilds the identical layout.
+
 ### Styles
 
 Six named styles, defined once in `styles.ts` and read by the CSS emitter, the
@@ -170,10 +221,9 @@ the `Doc` verbatim; import validates that `blocks` is an array and every
 
 ## Not built, on purpose
 
-- **Line-level page splitting.** A block that does not fit moves whole to the
-  next page, leaving a gap at the bottom. On a resume this is invisible. The v2
-  approach is noted in `paginate.ts`: `Range.getClientRects()` per line box, a
-  binary search for the split offset, plus widow/orphan control.
+- **Splitting a single line.** A block whose one line is taller than a whole
+  page is placed and clipped.
+
 - Tables, images, columns, text boxes. Tables are **dropped** on paste, text
   and all — worth knowing if you paste a resume that uses a table for layout.
 - .docx or PDF import; headers, footers, page numbers; collaboration; spell
@@ -186,6 +236,10 @@ Undo granularity is coarser than Word's: typing coalesces into one entry per
 
 Run these in order; all pass as of the last change.
 
+0. **Line-level pagination** - on randomized multi-page documents: no page
+   overflows, no heading is ever the last line on a page, and every page's
+   trailing whitespace is provably explained (its slack is strictly less
+   than its recorded `needh`). Text survives split and re-merge intact.
 1. **Geometry** — page is 816×1056, content box 720×960; the last line on a
    full page sits within one line height of the bottom margin.
 2. **Flow down** — hold Enter to page 3 and beyond. No page ever exceeds the

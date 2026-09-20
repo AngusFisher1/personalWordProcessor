@@ -46,6 +46,16 @@ export interface Block {
   styleId: StyleId;
   /** Inline markup only: b, i, u, a, br. Anything else is stripped on the way in. */
   html: string;
+  /**
+   * Set on the continuation half of a block that pagination split across a
+   * page boundary, pointing at the id of the block it continues.
+   *
+   * A pure render artifact: readModel merges continuations back before save,
+   * export or an undo snapshot, so the stored document always has exactly one
+   * block per logical paragraph and nothing downstream has to know that
+   * splitting exists.
+   */
+  continuesFrom?: string;
 }
 
 export interface Doc {

@@ -72,6 +72,108 @@ export function blockEl(id: string): HTMLElement | null {
 }
 
 /* ------------------------------------------------------------------ *
+ * Logical blocks
+ *
+ * Pagination may split one paragraph across several page containers. Those
+ * pieces are a render artifact: the first piece keeps the logical block's id,
+ * and every continuation carries data-continues-from pointing at it plus
+ * data-base, the character offset where that piece starts in the merged text.
+ *
+ * Everything outside paginate.ts should work in logical blocks, not pieces.
+ * ------------------------------------------------------------------ */
+
+export interface Group {
+  head: HTMLElement;
+  tails: HTMLElement[];
+}
+
+export function logicalIdOf(el: HTMLElement): string {
+  return el.dataset.continuesFrom || el.dataset.blockId || '';
+}
+
+export function isContinuation(el: HTMLElement): boolean {
+  return !!el.dataset.continuesFrom;
+}
+
+export function pieceBase(el: HTMLElement): number {
+  const n = Number(el.dataset.base);
+  return Number.isFinite(n) ? n : 0;
+}
+
+/** Every piece of one logical block, in document order. */
+export function piecesOf(id: string): HTMLElement[] {
+  const e = CSS.escape(id);
+  return Array.from(
+    docEl().querySelectorAll(
+      `[data-block-id="${e}"], [data-continues-from="${e}"]`
+    )
+  ) as HTMLElement[];
+}
+
+export function clearSplitMarks(el: HTMLElement): void {
+  el.classList.remove('split-cont', 'split-more');
+  delete el.dataset.continuesFrom;
+  delete el.dataset.base;
+}
+
+/**
+ * Group the piece elements into logical blocks, in document order. A
+ * continuation whose head has gone away - which editing across a page break
+ * can produce - is promoted to a block of its own rather than dropped.
+ */
+export function logicalGroups(root: HTMLElement = docEl()): Group[] {
+  const out: Group[] = [];
+  for (const el of blocksIn(root)) {
+    const from = el.dataset.continuesFrom;
+    const last = out[out.length - 1];
+    if (from && last && last.head.dataset.blockId === from) {
+      last.tails.push(el);
+      continue;
+    }
+    if (from) clearSplitMarks(el); // orphaned continuation
+    if (!el.dataset.blockId) el.dataset.blockId = newId();
+    out.push({ head: el, tails: [] });
+  }
+  return out;
+}
+
+export function logicalHeads(root: HTMLElement = docEl()): HTMLElement[] {
+  return logicalGroups(root).map((g) => g.head);
+}
+
+/** The logical block a piece belongs to. */
+export function headOf(el: HTMLElement): HTMLElement {
+  if (!el.dataset.continuesFrom) return el;
+  return (blockEl(el.dataset.continuesFrom) as HTMLElement | null) ?? el;
+}
+
+function isBrOnly(el: HTMLElement): boolean {
+  return el.childNodes.length === 1 && el.firstChild?.nodeName === 'BR';
+}
+
+/**
+ * Undo a split: fold every continuation back into the head. Pagination does
+ * this before measuring so it always starts from one element per paragraph.
+ */
+export function mergeGroup(g: Group): void {
+  for (const t of g.tails) {
+    // A piece the user emptied contributes only its placeholder <br>, which
+    // would otherwise show up as a spurious line break in the merged text.
+    if (!isBrOnly(t)) {
+      while (t.firstChild) g.head.appendChild(t.firstChild);
+    }
+    t.remove();
+  }
+  g.tails.length = 0;
+  clearSplitMarks(g.head);
+  if (!g.head.firstChild) g.head.innerHTML = '<br>';
+}
+
+export function mergeAllGroups(root: HTMLElement = docEl()): void {
+  for (const g of logicalGroups(root)) mergeGroup(g);
+}
+
+/* ------------------------------------------------------------------ *
  * Render / read back
  * ------------------------------------------------------------------ */
 
@@ -93,14 +195,26 @@ export function renderBlocks(blocks: Block[], root: HTMLElement): void {
  * serialization target refreshed from the DOM on save, export and snapshot.
  */
 export function readModel(root: HTMLElement): Block[] {
-  return blocksIn(root).map((el) => {
-    let id = el.dataset.blockId;
+  // Continuation pieces are merged back here, so the stored document always
+  // has exactly one block per logical paragraph.
+  return logicalGroups(root).map((g) => {
+    let id = g.head.dataset.blockId;
     if (!id) {
       id = newId();
-      el.dataset.blockId = id;
+      g.head.dataset.blockId = id;
     }
-    return { id, styleId: styleOf(el), html: readBlockHtml(el) };
+    return { id, styleId: styleOf(g.head), html: mergedHtml(g) };
   });
+}
+
+function mergedHtml(g: Group): string {
+  if (g.tails.length === 0) return readBlockHtml(g.head);
+  const joined = document.createElement('div');
+  for (const el of [g.head, ...g.tails]) {
+    if (el !== g.head && isBrOnly(el)) continue;
+    for (const n of Array.from(el.childNodes)) joined.appendChild(n.cloneNode(true));
+  }
+  return readBlockHtml(joined);
 }
 
 export function readBlockHtml(el: HTMLElement): string {

@@ -263,6 +263,27 @@ function paragraphXml(b: ParagraphBlock, vault: Vault): string {
   return '<w:p>' + pPr + runsXml(b.html, vault, vault.blockRPr.get(b.id)) + '</w:p>';
 }
 
+/**
+ * Rebuild any header or footer part whose text changed. Untouched parts are
+ * left alone entirely, so a document whose letterhead was not edited still
+ * exports byte-identically.
+ */
+export function buildHeaderParts(doc: Doc, vault: Vault): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const [key, path] of vault.hfParts) {
+    const [which, variant] = key.split(':');
+    const set = which === 'headerReference' ? doc.headers : doc.footers;
+    const blocks = set?.[variant as 'default' | 'first' | 'even'];
+    if (!blocks || blocks.length === 0) continue;
+    const dirty = blocks.some((b) => vault.blockHtml.get(b.id) !== b.html);
+    if (!dirty) continue;
+    const shell = vault.hfShell.get(path);
+    if (!shell) continue;
+    out.set(path, shell.prefix + blocks.map((b) => paragraphXml(b, vault)).join('') + shell.suffix);
+  }
+  return out;
+}
+
 export function buildBody(doc: Doc, vault: Vault): string {
   let out = '';
   const emitted = new Set<number>();

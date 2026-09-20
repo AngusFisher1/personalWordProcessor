@@ -137,6 +137,45 @@ export interface TableBlock {
 
 export type Block = ParagraphBlock | TableBlock;
 
+/* ------------------------------------------------------------------ *
+ * Headers and footers
+ *
+ * Word keeps up to three of each: one for the first page when the document
+ * has a title page, one for even pages when odd and even differ, and one for
+ * everything else.
+ * ------------------------------------------------------------------ */
+
+export type HFVariant = 'default' | 'first' | 'even';
+export type HeaderFooterSet = Partial<Record<HFVariant, ParagraphBlock[]>>;
+
+export interface Doc2Extras {
+  headers?: HeaderFooterSet;
+  footers?: HeaderFooterSet;
+  /** w:titlePg - the first page uses its own header and footer. */
+  titlePage?: boolean;
+  /** w:evenAndOddHeaders - even pages use their own. */
+  evenOdd?: boolean;
+  /** px from the page edge to the header and footer, from w:pgMar. */
+  headerDistance?: number;
+  footerDistance?: number;
+}
+
+/** Which header and footer a given page uses. */
+export function hfVariant(doc: Doc, pageIndex: number): HFVariant {
+  if (pageIndex === 0 && doc.titlePage) return 'first';
+  if (doc.evenOdd && (pageIndex + 1) % 2 === 0) return 'even';
+  return 'default';
+}
+
+/** Falls back the way Word does: a missing variant uses the default one. */
+export function hfFor(
+  set: HeaderFooterSet | undefined,
+  variant: HFVariant
+): ParagraphBlock[] {
+  if (!set) return [];
+  return set[variant] ?? set.default ?? [];
+}
+
 export function isTable(b: Block): b is TableBlock {
   return (b as TableBlock).kind === 'table';
 }
@@ -158,7 +197,7 @@ export function paragraphsOf(blocks: Block[]): ParagraphBlock[] {
   return out;
 }
 
-export interface Doc {
+export interface Doc extends Doc2Extras {
   id: string;
   title: string;
   page: PageSetup;

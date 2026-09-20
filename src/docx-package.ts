@@ -68,6 +68,10 @@ export interface Vault {
    * regenerate - an image, whose w:drawing carries far more than a src.
    */
   runXml: Map<string, string>;
+  /** "headerReference:first" -> word/header2.xml, for writing edits back. */
+  hfParts: Map<string, string>;
+  /** Each header/footer part's text either side of its own content. */
+  hfShell: Map<string, { prefix: string; suffix: string }>;
   /** Per table: its w:tblPr and w:tblGrid, so an edited table keeps them. */
   tablePr: Map<string, { tblPr: string; tblGrid: string }>;
   /** Per row id: its w:trPr. */
@@ -93,6 +97,8 @@ export function emptyVault(): Vault {
     styleBack: new Map(),
     relByTarget: new Map(),
     runXml: new Map(),
+    hfParts: new Map(),
+    hfShell: new Map(),
     tablePr: new Map(),
     rowPr: new Map(),
     cellPr: new Map(),
@@ -138,7 +144,12 @@ export function partText(parts: Map<string, Uint8Array>, name: string): string |
  * the vault; only word/document.xml is regenerated, and even that keeps its
  * original prologue so the namespace declarations are exactly as they were.
  */
-export async function repack(vault: Vault, bodyInner: string): Promise<Blob> {
+export async function repack(
+  vault: Vault,
+  bodyInner: string,
+  /** Other parts to replace wholesale, such as an edited header. */
+  extra?: Map<string, string>
+): Promise<Blob> {
   const zip = new JSZip();
   // [Content_Types].xml must be the first entry for some consumers.
   const order = Array.from(vault.parts.keys()).sort((a, b) => {
@@ -148,7 +159,9 @@ export async function repack(vault: Vault, bodyInner: string): Promise<Blob> {
   });
   for (const name of order) {
     if (name === DOC_XML) continue;
-    zip.file(name, vault.parts.get(name) as Uint8Array, { binary: true });
+    const replaced = extra?.get(name);
+    if (replaced !== undefined) zip.file(name, replaced);
+    else zip.file(name, vault.parts.get(name) as Uint8Array, { binary: true });
   }
   zip.file(DOC_XML, vault.docXmlPrefix + bodyInner + vault.docXmlSuffix);
   return zip.generateAsync({

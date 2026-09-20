@@ -166,7 +166,7 @@ export function pages(root: HTMLElement = docEl()): HTMLElement[] {
  */
 export function blocksIn(root: HTMLElement): HTMLElement[] {
   return (Array.from(root.querySelectorAll('.blk')) as HTMLElement[]).filter(
-    (el) => !el.closest('.blk-table')
+    (el) => !el.closest('.blk-table, .page-header, .page-footer')
   );
 }
 
@@ -490,6 +490,15 @@ export function cleanInline(parent: Node, opts: CleanOptions = {}): void {
     const el = n as HTMLElement;
     const tag = el.tagName;
 
+    if (tag === 'SPAN' && el.hasAttribute('data-field') && opts.allowImages) {
+      // A field token. Its text is a render-time value, so it is emptied on
+      // the way to the model - storing "Page 3 of 12" would freeze it.
+      for (const a of Array.from(el.attributes)) {
+        if (a.name !== 'data-field') el.removeAttribute(a.name);
+      }
+      el.textContent = '';
+      continue;
+    }
     if (tag === 'IMG' && opts.allowImages) {
       // An image is described by which part it draws and which preserved run
       // writes it back. The resolved src is a render-time detail.

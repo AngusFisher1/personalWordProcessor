@@ -1,6 +1,8 @@
 import type {
   Block,
   Doc,
+  HFVariant,
+  HeaderFooterSet,
   PageSetup,
   ParagraphBlock,
   StyleId,
@@ -111,7 +113,8 @@ interface Fmt {
 type Piece =
   | ({ t: 'text'; text: string; href: string | null } & Fmt)
   | { t: 'br' }
-  | { t: 'img'; media: string; run: string; w: number; h: number };
+  | { t: 'img'; media: string; run: string; w: number; h: number }
+  | { t: 'field'; name: string };
 
 interface Ctx {
   rels: Map<string, string>;
@@ -119,7 +122,22 @@ interface Ctx {
   /** Serializes an element without repeating the root's namespaces. */
   serialize: (el: Element) => string;
   imageCount: number;
+  /**
+   * Complex-field state. Word writes PAGE as begin / instrText / separate /
+   * cached result / end, spread across sibling runs, so reading one means
+   * carrying state between them.
+   */
+  fieldDepth: number;
+  fieldInstr: string;
+  fieldSkip: boolean;
 }
+
+/** " PAGE  \* MERGEFORMAT " -> "PAGE". */
+function fieldName(instr: string): string {
+  return (instr.trim().split(/\s+/)[0] ?? '').toUpperCase();
+}
+
+const KNOWN_FIELDS = new Set(['PAGE', 'NUMPAGES', 'TITLE', 'FILENAME', 'DATE']);
 
 /** 914400 EMU to the inch, 96 CSS pixels to the inch. */
 const EMU_PER_PX = 9525;
@@ -190,7 +208,29 @@ function emitRun(r: Element, fmt: Fmt, href: string | null, out: Piece[], ctx: C
   };
   for (const c of elementChildren(r)) {
     switch (c.localName) {
+      case 'fldChar': {
+        const kind = wAttr(c, 'fldCharType');
+        if (kind === 'begin') {
+          ctx.fieldDepth++;
+          ctx.fieldInstr = '';
+          ctx.fieldSkip = false;
+        } else if (kind === 'separate') {
+          ctx.fieldSkip = true; // what follows is the cached result
+        } else if (kind === 'end' && ctx.fieldDepth > 0) {
+          ctx.fieldDepth--;
+          const name = fieldName(ctx.fieldInstr);
+          if (KNOWN_FIELDS.has(name)) out.push({ t: 'field', name });
+          ctx.fieldInstr = '';
+          ctx.fieldSkip = false;
+        }
+        break;
+      }
+      case 'instrText':
+        if (ctx.fieldDepth > 0) ctx.fieldInstr += c.textContent ?? '';
+        break;
       case 't':
+        // Inside a field this is the cached result, which we recompute.
+        if (ctx.fieldDepth > 0) break;
         out.push({ t: 'text', text: c.textContent ?? '', href, ...f });
         break;
       case 'br':
@@ -253,9 +293,14 @@ function walkInline(
         addWarning(ctx.vault, 'contentControls', 'Content controls are read-only');
         walkInline(c, fmt, href, out, ctx);
         break;
+      case 'fldSimple': {
+        const name = fieldName(wAttr(c, 'instr') ?? '');
+        if (KNOWN_FIELDS.has(name)) out.push({ t: 'field', name });
+        else walkInline(c, fmt, href, out, ctx); // keep its cached text
+        break;
+      }
       case 'sdtContent':
       case 'smartTag':
-      case 'fldSimple':
         walkInline(c, fmt, href, out, ctx);
         break;
       default:
@@ -286,6 +331,11 @@ function piecesToHtml(pieces: Piece[]): string {
   for (const p of merged) {
     if (p.t === 'br') {
       html += '<br>';
+      continue;
+    }
+    if (p.t === 'field') {
+      // Empty on purpose: the value is filled in at render, per page.
+      html += `<span data-field="${escapeAttr(p.name)}"></span>`;
       continue;
     }
     if (p.t === 'img') {
@@ -723,7 +773,15 @@ export async function importDocx(
   for (const [id, target] of rels) {
     if (!vault.relByTarget.has(target)) vault.relByTarget.set(target, id);
   }
-  const ctx: Ctx = { rels, vault, serialize, imageCount: 0 };
+  const ctx: Ctx = {
+    rels,
+    vault,
+    serialize,
+    imageCount: 0,
+    fieldDepth: 0,
+    fieldInstr: '',
+    fieldSkip: false,
+  };
   registerMedia(parts);
   const counters = new ListCounters();
   const page = readSectPr(kid(body, 'sectPr'));
@@ -942,11 +1000,107 @@ export async function importDocx(
     blocks.push({ id: newId(), styleId: 'Body', html: '' });
   }
 
+  /* ---- headers and footers ---- */
+
+  const sectPr = kid(body, 'sectPr');
+  const headers: HeaderFooterSet = {};
+  const footers: HeaderFooterSet = {};
+
+  const readPart = (partPath: string, keyPrefix: string): ParagraphBlock[] => {
+    const xmlText = partText(parts, partPath);
+    if (!xmlText) return [];
+    const parsedPart = new DOMParser().parseFromString(xmlText, 'application/xml');
+    const root = parsedPart.documentElement;
+    if (!root) return [];
+    // A header part has its own relationships, for its own images.
+    const partRels = readRels(
+      partText(
+        parts,
+        partPath.replace(/^word\/(.*)$/, 'word/_rels/$1.rels')
+      )
+    );
+    // Keep what surrounds the content, so an edited part can be rebuilt with
+    // its own namespaces intact rather than generated from scratch.
+    const open = xmlText.match(/<w:(?:hdr|ftr)(?:\s[^>]*)?>/);
+    const closeAt = Math.max(
+      xmlText.lastIndexOf('</w:hdr>'),
+      xmlText.lastIndexOf('</w:ftr>')
+    );
+    if (open && closeAt > 0) {
+      vault.hfShell.set(partPath, {
+        prefix: xmlText.slice(0, (open.index ?? 0) + open[0].length),
+        suffix: xmlText.slice(closeAt),
+      });
+    }
+    const partSerialize = makeSerializer(root);
+    const partCtx: Ctx = {
+      rels: partRels,
+      vault,
+      serialize: partSerialize,
+      imageCount: 1000,
+      fieldDepth: 0,
+      fieldInstr: '',
+      fieldSkip: false,
+    };
+    const out: ParagraphBlock[] = [];
+    kids(root, 'p').forEach((pEl, i) => {
+      const pieces: Piece[] = [];
+      walkInline(pEl, { b: false, i: false, u: false }, null, pieces, partCtx);
+      const pPr = kid(pEl, 'pPr');
+      const pStyle = wAttr(kid(pPr, 'pStyle'), 'val');
+      const id = `${keyPrefix}p${i}`;
+      const html = piecesToHtml(pieces);
+      vault.blockXml.set(id, partSerialize(pEl));
+      if (pPr) vault.blockPPr.set(id, partSerialize(pPr));
+      vault.blockHtml.set(id, html);
+      const styleId = recognizedStyle(pStyle, styleNames) ?? 'Body';
+      vault.blockStyle.set(id, styleId);
+      out.push({ id, styleId, html });
+    });
+    return out;
+  };
+
+  for (const [which, set] of [
+    ['headerReference', headers],
+    ['footerReference', footers],
+  ] as [string, HeaderFooterSet][]) {
+    for (const ref of kids(sectPr, which)) {
+      const type = (wAttr(ref, 'type') ?? 'default') as HFVariant;
+      const rid = rAttr(ref, 'id');
+      const target = rid ? rels.get(rid) : null;
+      if (!target) continue;
+      const partPath = target.startsWith('/')
+        ? target.slice(1)
+        : 'word/' + target.replace(/^\.\//, '');
+      vault.hfParts.set(`${which}:${type}`, partPath);
+      const read = readPart(partPath, `${type}-${which[0]}-`);
+      if (read.length > 0) set[type === 'even' ? 'even' : type === 'first' ? 'first' : 'default'] = read;
+    }
+  }
+
+  const titlePage = !!kid(sectPr, 'titlePg');
+  const settings = partText(parts, 'word/settings.xml') ?? '';
+  const evenOdd = /<w:evenAndOddHeaders/.test(settings);
+
+  const pgMar = kid(sectPr, 'pgMar');
+  const headerDistance = pgMar
+    ? Math.round(twipToPx(intOf(wAttr(pgMar, 'header'), 720)))
+    : 48;
+  const footerDistance = pgMar
+    ? Math.round(twipToPx(intOf(wAttr(pgMar, 'footer'), 720)))
+    : 48;
+
   const doc: Doc = {
     id: newId(),
     title: fileName.replace(/\.docx$/i, '') || 'Untitled',
     page,
     blocks,
+    ...(Object.keys(headers).length ? { headers } : {}),
+    ...(Object.keys(footers).length ? { footers } : {}),
+    ...(titlePage ? { titlePage } : {}),
+    ...(evenOdd ? { evenOdd } : {}),
+    headerDistance,
+    footerDistance,
   };
 
   return { doc, vault };

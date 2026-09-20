@@ -7,7 +7,9 @@ import {
   emptyDoc,
   marginPreset,
   newBlock,
+  newId,
   uniformMargins,
+  contentWidth,
 } from './model';
 import { DOC_FONT, STYLES, injectStyleSheet } from './styles';
 import { blockEl, blocksIn, docEl, readModel, renderAll } from './render';
@@ -19,6 +21,7 @@ import {
   pageCount,
   paginate,
   paginateIfNeeded,
+  setHeaderFooterSpace,
   setPageSetup,
 } from './paginate';
 import {
@@ -28,7 +31,18 @@ import {
   setBlockStyle,
   toggleInline,
 } from './commands';
-import { caretAtStart } from './caret';
+import { caretAtStart, getCaret, placeCaret } from './caret';
+import type { HFHeights } from './headers';
+import {
+  firstHFBlock,
+  hasHeaderOrFooter,
+  hfSpace,
+  isEditingHF,
+  measureHF,
+  readHF,
+  renderHF,
+  setEditingHF,
+} from './headers';
 import { closeFind, isFindOpen, openFind, refreshFind, selectedText } from './findbar';
 import { bindPaste } from './paste';
 import {
@@ -85,6 +99,7 @@ let vault: Vault | null = null;
 const ui = {
   style: null as ReturnType<typeof menuButton> | null,
   page: null as ReturnType<typeof menuButton> | null,
+  hf: null as HTMLButtonElement | null,
   palette: null as ReturnType<typeof menuButton> | null,
   title: null as HTMLInputElement | null,
   bold: null as HTMLButtonElement | null,
@@ -116,6 +131,13 @@ function buildToolbar(host: HTMLElement): void {
   host.appendChild(
     textButton('Find', `Find and replace (${MOD}F)`, () => showFind(), '', MOD + 'F')
   );
+  ui.hf = textButton(
+    'Header & footer',
+    'Edit the header and footer (Esc to return)',
+    () => toggleHF(),
+    'tb-hf'
+  );
+  host.appendChild(ui.hf);
 
   const file = menuButton('File', 'Documents, open, save and export', () => [
     { label: 'New document', hint: MOD + 'N', onSelect: () => newDocument() },
@@ -338,6 +360,42 @@ function mountTitle(): void {
   ui.title = input;
 }
 
+/**
+ * Header editing is a separate context: the body dims, the header slots
+ * become editable, and Escape hands the caret back to the body.
+ */
+function toggleHF(): void {
+  if (isEditingHF()) {
+    exitHF();
+    return;
+  }
+  if (!hasHeaderOrFooter(doc)) {
+    // Nothing to edit yet; give the document an empty header to type into.
+    doc.headers = { default: [{ id: newId(), styleId: 'Body', html: '' }] };
+    layout();
+  }
+  setEditingHF(true);
+  ui.hf?.classList.add('on');
+  const first = firstHFBlock();
+  if (first) {
+    docEl().focus();
+    caretAtStart(first);
+  }
+  updateToolbar();
+}
+
+function exitHF(): void {
+  setEditingHF(false);
+  ui.hf?.classList.remove('on');
+  const first = blocksIn(docEl())[0];
+  if (first) {
+    docEl().focus();
+    caretAtStart(first);
+  }
+  scheduleSave();
+  updateToolbar();
+}
+
 function showFind(): void {
   openFind(
     {
@@ -479,15 +537,52 @@ let reflowTimer = 0;
 function scheduleReflow(): void {
   clearTimeout(reflowTimer);
   reflowTimer = window.setTimeout(() => {
-    paginate();
+    layout();
     updateToolbar();
   }, 150);
 }
 
 function reflowNow(): void {
   clearTimeout(reflowTimer);
-  paginate();
+  layout();
   updateToolbar();
+}
+
+/* ------------------------------------------------------------------ *
+ * Layout
+ *
+ * NUMPAGES is circular: the page count depends on pagination, and a header
+ * carrying the count can change height when the number widens, which
+ * changes pagination. Resolved by paginating with the count we have,
+ * substituting, and repaginating once if a header actually changed height.
+ * Two passes, then the second result stands.
+ * ------------------------------------------------------------------ */
+
+let hfHeights: HFHeights = {
+  header: { default: 0, first: 0, even: 0 },
+  footer: { default: 0, first: 0, even: 0 },
+};
+
+function sameHeights(a: HFHeights, b: HFHeights): boolean {
+  return (['default', 'first', 'even'] as const).every(
+    (v) =>
+      Math.abs(a.header[v] - b.header[v]) < 0.5 &&
+      Math.abs(a.footer[v] - b.footer[v]) < 0.5
+  );
+}
+
+function layout(opts?: { fromPage?: number }): void {
+  const width = contentWidth(doc.page);
+  hfHeights = measureHF(doc, width, Math.max(1, pageCount()));
+  paginate(opts);
+  renderHF(doc, hfHeights);
+
+  const after = measureHF(doc, width, pageCount());
+  if (!sameHeights(hfHeights, after)) {
+    hfHeights = after;
+    paginate();
+    renderHF(doc, hfHeights);
+  }
 }
 
 
@@ -618,10 +713,11 @@ function openDoc(d: Doc): void {
   setPageSetup(d.page);
   if (ui.title) ui.title.value = d.title;
   lastWords = -1;
+  setHeaderFooterSpace((i) => hfSpace(doc, hfHeights, i));
   renderAll(doc, docEl());
   normalize();
   ensureTrailingBlock();
-  paginate();
+  layout();
   resetHistory();
   // Put the caret at the top so the document is ready to type into, and so
   // the toolbar has a paragraph to report the style of.
@@ -713,8 +809,22 @@ function boot(): void {
   bindShortcuts(root);
   bindPaste(root);
 
-  root.addEventListener('input', () => {
+  root.addEventListener('input', (e) => {
     closeMenu();
+    // An edit inside a header changes how much room the body has, so it has
+    // to be read back and re-measured rather than treated as body input.
+    const target = e.target as HTMLElement | null;
+    if (isEditingHF() && (target?.closest?.('.page-header, .page-footer'))) {
+      const caret = getCaret();
+      if (readHF(doc)) {
+        layout();
+        if (caret) placeCaret(caret);
+      }
+      noteTyping();
+      updateToolbar();
+      scheduleSave();
+      return;
+    }
     normalize();
     if (ensureTrailingBlock()) paginate();
     paginateIfNeeded(); // synchronous, before paint
@@ -741,6 +851,11 @@ function boot(): void {
     if (e.key === 'Escape' && isFindOpen()) {
       e.preventDefault();
       closeFind();
+      return;
+    }
+    if (e.key === 'Escape' && isEditingHF()) {
+      e.preventDefault();
+      exitHF();
       return;
     }
     if (!(e.metaKey || e.ctrlKey)) return;

@@ -40,8 +40,23 @@ export function currentPageSetup(): PageSetup {
   return page;
 }
 
-function limitH(): number {
-  return contentHeight(page);
+/**
+ * Space available for body text on one page.
+ *
+ * NOT a constant. A header and footer take their height out of it, and which
+ * ones a page uses depends on its number - so every comparison has to go
+ * through here. A stray hardcoded value produces a one-page-off error that
+ * only shows up in long documents.
+ */
+function limitFor(pageIndex: number): number {
+  return contentHeight(page) - hfTaken(pageIndex);
+}
+
+/** Set by the caller, since the paginator does not own the document. */
+let hfTaken: (pageIndex: number) => number = () => 0;
+
+export function setHeaderFooterSpace(fn: (pageIndex: number) => number): void {
+  hfTaken = fn;
 }
 
 function limitW(): number {
@@ -522,7 +537,10 @@ function usedHeight(content: HTMLElement): number {
   return h;
 }
 
-function assign(groups: Group[], limit: number): { pages: Piece[][]; need: number[] } {
+function assign(
+  groups: Group[],
+  firstPage: number
+): { pages: Piece[][]; need: number[] } {
   const out: Piece[][] = [[]];
   const need: number[] = [];
   let running = 0;
@@ -531,6 +549,8 @@ function assign(groups: Group[], limit: number): { pages: Piece[][]; need: numbe
   let pulledFor = -1;
 
   const cur = () => out[out.length - 1];
+  // The limit follows the page being filled, not the document.
+  const limitNow = () => limitFor(firstPage + out.length - 1);
   const breakPage = (needed: number) => {
     need[out.length - 1] = needed;
     out.push([]);
@@ -548,6 +568,7 @@ function assign(groups: Group[], limit: number): { pages: Piece[][]; need: numbe
       continue;
     }
 
+    const limit = limitNow();
     const restH = pieceHeight(info, from, lines);
     if (restH <= limit - running) {
       cur().push({ g, info, from, to: lines });
@@ -851,7 +872,7 @@ export function paginate(opts?: { fromPage?: number }): void {
   // Work from one element per paragraph, always.
   for (const g of groups) mergeGroup(g);
 
-  const assigned = assign(groups, limitH());
+  const assigned = assign(groups, from);
   materialize(assigned.pages);
 
   let idx = from;
@@ -888,7 +909,7 @@ export function paginateIfNeeded(): void {
   if (!page) return;
 
   const content = pageContent(page);
-  const limit = limitH();
+  const limit = limitFor(pages(root).indexOf(page));
   const used = usedHeight(content);
 
   if (used > limit) {
@@ -921,6 +942,6 @@ export function pageCount(): number {
 
 /** Diagnostics for the acceptance checks: slack left at the foot of each page. */
 export function pageSlack(): number[] {
-  return pages().map((p) => limitH() - usedHeight(pageContent(p)));
+  return pages().map((p, i) => limitFor(i) - usedHeight(pageContent(p)));
 }
 

@@ -324,7 +324,19 @@ html, body {
   position: relative;
 }
 
+/* The page is a column: header, body box, footer, inside the margins. */
+.page {
+  display: flex;
+  flex-direction: column;
+}
+.page-header, .page-footer {
+  flex: none;
+  width: var(--content-w);
+}
+.page-footer { margin-top: auto; }
+
 .page-content {
+  flex: none;
   width: var(--content-w);
   height: var(--content-h); /* the fixed comparison target */
   overflow: hidden;         /* no visible spill flash mid-keystroke */
@@ -341,6 +353,15 @@ html, body {
 }
 
 .blk a { color: inherit; text-decoration: underline; }
+
+/* While the header is being edited the body recedes rather than locking, so
+   the page still reads as a page. */
+#app.hf-edit .page-content { opacity: 0.16; pointer-events: none; }
+#app.hf-edit .page-header,
+#app.hf-edit .page-footer {
+  outline: 1px dashed var(--acc);
+  outline-offset: 2px;
+}
 
 /* ---------- gutter: page numbers and break rules ----------
    Drawn as an overlay over the canvas rather than inside the pages, so none

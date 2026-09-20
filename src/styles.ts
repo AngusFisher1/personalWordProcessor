@@ -302,6 +302,20 @@ const FIND_CSS =
   '.blk span.find-hit { background: rgba(217, 123, 60, .28); }\n' +
   '.blk span.find-hit.on { background: var(--acc); color: var(--accfg); }\n';
 
+/**
+ * Headers and footers sit inside the page's margin, above and below the body
+ * box. They are part of the paper, so unlike the rest of the chrome they do
+ * print - which is the whole point of them.
+ */
+const HF_CSS =
+  '.page-header, .page-footer {\n' +
+  '  overflow: hidden;\n' +
+  '  color: #111111;\n' +
+  '}\n' +
+  '.page-header .blk, .page-footer .blk { padding-top: 0; padding-bottom: 0; }\n' +
+  '.page-header .blk:last-child { padding-bottom: 2pt; }\n' +
+  '.page-footer .blk:first-child { padding-top: 2pt; }\n';
+
 const SPLIT_CSS =
   '.blk.split-cont { padding-top: 0; text-indent: 0; }\n' +
   '.blk.split-cont::before { content: none; }\n' +
@@ -320,6 +334,7 @@ export function injectStyleSheet(): void {
     TABLE_CSS +
     IMAGE_CSS +
     FIND_CSS +
+    HF_CSS +
     SPLIT_CSS;
   document.head.appendChild(el);
 }

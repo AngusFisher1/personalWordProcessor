@@ -16,7 +16,7 @@ import { STYLE_IDS, isTable } from './model';
 import { DOCX_FONT, INK, RULE_COLOR, STYLES } from './styles';
 import type { Vault } from './docx-package';
 import { repack } from './docx-package';
-import { buildBody, parseInline, stripTags } from './docx-body';
+import { buildBody, buildHeaderParts, parseInline, stripTags } from './docx-body';
 
 /**
  * The model maps almost directly: Block -> Paragraph, styleId -> a named
@@ -189,7 +189,7 @@ function pageMargin(m: Margins) {
  */
 export async function exportDocx(doc: Doc, vault?: Vault | null): Promise<Blob> {
   if (vault && vault.parts.size > 0) {
-    return repack(vault, buildBody(doc, vault));
+    return repack(vault, buildBody(doc, vault), buildHeaderParts(doc, vault));
   }
   return exportFresh(doc);
 }

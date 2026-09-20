@@ -72,7 +72,8 @@ All geometry is in CSS pixels at 96px per inch, and the numbers are exact.
 | `persist.ts` | localStorage, JSON import/export |
 | `history.ts` | undo/redo stack |
 | `export-docx.ts` | .docx generation, and the choice between the two paths |
-| `docx-import.ts` | OOXML to model: paragraphs, styles, numbering, sections |
+| `docx-import.ts` | OOXML to model: paragraphs, tables, styles, numbering, sections |
+| `docx-infer.ts` | what a paragraph is when the document does not say |
 | `docx-package.ts` | the preservation vault: unzip, repack, keep the original |
 | `docx-body.ts` | model back to a document.xml body, for imported files |
 | `styles.css` | page geometry, print rules |
@@ -232,6 +233,67 @@ correctly. The marker is held in a `listMarker` field, out of the text the
 user edits, and ignored on export: the paragraph's own `w:numPr` goes back and
 Word renumbers the list itself.
 
+### Headings, when the document does not say
+
+Real documents are not styled. Across 44 of them, 1,348 of 1,573 paragraphs
+carried no `w:pStyle` at all and only 11 used `Heading1`. A mapping table
+keyed on style names is correct and almost never fires, so every heading
+lands on Body and documents import flat.
+
+Paragraphs with no recognized style therefore go through an inference pass
+that reads the formatting: Word's own `w:outlineLvl` first, then a rule under
+the line, size relative to the body text, bold and capitals - all gated on the
+paragraph being short, because prose is never a heading however it is set.
+
+Two measurements decided the thresholds rather than taste:
+
+- Formatting is weighted by **characters, not runs**. Word splits a line into
+  runs for its own reasons, and counting runs weights a one-character fragment
+  like a whole sentence.
+- "Mostly bold" is **half** the line. The ordinary resume idiom - a bold job
+  title followed by an unbolded date range - lands at 58%, so a stricter cut
+  misses exactly the case the rule exists for.
+
+Body size is a character-weighted mode of the document itself, so a 10pt
+document and a 12pt one are each measured against their own norm. A separate
+pass promotes the document's title, and the line beneath it becomes a contact
+line only when it actually looks like one - otherwise a contract's date line
+would be set in contact type.
+
+`test/infer.test.mjs` pins this down against a resume with no named styles
+anywhere, and checks that named styles still win, that a contract is not read
+as a resume, and that a cover letter grows no headings.
+
+### Tables
+
+`Block` is a union of `ParagraphBlock` and `TableBlock`. A cell holds an array
+of paragraphs, so the renderer, styles, caret and inline sanitizer all work
+inside a cell without knowing tables exist.
+
+Column widths come from the document's own `w:tblGrid`, and the table is laid
+out `table-layout: fixed` at that width - a browser's automatic layout would
+quietly disagree with what Word measured and move the row breaks. A grid is
+only trusted if it describes a table of roughly the right size, because some
+writers emit nominal widths and size the table by percentage instead; a table
+wider than the page is scaled to fit. A `gridSpan` is carried as placeholder
+cells that the renderer turns into a `colspan`, so a row always has one entry
+per grid column.
+
+A table splits at **row** boundaries, repeating its leading header rows at the
+top of each continuation. The repeated rows are marked, stripped of their
+block ids and made non-editable, so measurement, `readModel` and the caret all
+treat them as the render artifact they are. A page holding only the header and
+one row has stranded that row, so that is not a valid split and the table
+moves whole instead.
+
+Editing inside a cell round-trips: an untouched table exports verbatim from
+the vault, and an edited one is rebuilt keeping its `w:tblPr`, `w:tblGrid` and
+every `w:trPr` and `w:tcPr`, so borders, widths, shading and merges survive an
+edit to the words.
+
+Still to come: Tab between cells, column resize, and inserting or deleting
+rows and columns. Cell selection spanning multiple cells is out of scope.
+
 ### The preservation vault
 
 The original package is kept in memory. On export only the body of
@@ -272,8 +334,8 @@ Two honest limits:
 ## Fidelity harness
 
 ```bash
-npm run corpus          # write a seed corpus into test/corpus
-npm run test:roundtrip  # import, export and assert, over every file there
+npm run corpus   # write a seed corpus into test/corpus
+npm test         # inference, tables and the round trip
 ```
 
 For each document it asserts that every part survives, that **non-document

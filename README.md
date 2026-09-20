@@ -265,8 +265,28 @@ first time someone regenerates the package from scratch, which is the point.
 The suite runs in plain Node against the same bundled code the browser uses,
 with `@xmldom/xmldom` standing in for the browser's parser.
 
-See `test/corpus/README.md`: the seed corpus is synthetic and is a floor, not
-the corpus. Real files belong there, and they stay gitignored.
+Real documents can stay where they are - point the harness at a folder and it
+reads them in place, recursing up to six levels. Nothing is copied into the
+repository and nothing leaves the machine; the output is counts and file
+names, never document content:
+
+```bash
+npm run build:harness
+node test/roundtrip.mjs "/path/to/your/documents"
+```
+
+See `test/corpus/README.md`. The seed corpus is synthetic and is a floor, not
+the corpus.
+
+Two notes on what the assertions mean:
+
+- Text is compared with entities decoded. A parser legitimately rewrites
+  `&quot;` as `"`; the XML differs, the document does not. Comparing raw
+  markup reports those as lost text, which is a false alarm worth not chasing
+  twice.
+- A byte-identical `document.xml` is reported rather than required, for the
+  same reason. The binding assertions are the normalized text, the structural
+  counts, and byte-identity of every part other than the document itself.
 
 ## Printing to PDF
 

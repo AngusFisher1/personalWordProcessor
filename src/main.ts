@@ -1124,12 +1124,16 @@ function boot(): void {
   window.addEventListener('resize', () => refreshChrome());
 
   window.addEventListener('keydown', (e) => {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    // The platform's own modifier, not either one. Ctrl+K and Ctrl+E are
+    // emacs kill-line and end-of-line on a Mac, and a text field that
+    // opened a dialog instead would be maddening.
+    const mod = IS_MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey;
+    if (mod && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       toggleCommands();
       return;
     }
-    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && e.key.toLowerCase() === 'e') {
+    if (mod && !e.shiftKey && e.key.toLowerCase() === 'e') {
       e.preventDefault();
       showExportSheet();
       return;

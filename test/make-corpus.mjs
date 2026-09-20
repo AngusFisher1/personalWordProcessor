@@ -309,6 +309,47 @@ async function letterhead() {
   );
 }
 
+/* ---------------- 7b. two sections, different margins ---------------- */
+/**
+ * The shape real resumes turn out to have: a body set tight, and a trailing
+ * section on Word's own margins. Reading only the last sectPr - which is
+ * what a single page setup amounts to - lays the whole document out with
+ * the geometry of its last few paragraphs.
+ */
+async function twoSections() {
+  await save(
+    'two-sections.docx',
+    new Document({
+      sections: [
+        {
+          properties: {
+            page: { margin: { top: 360, right: 540, bottom: 360, left: 540 } },
+          },
+          headers: { default: new Header({ children: [para('SECTION ONE')] }) },
+          children: [
+            new Paragraph({ text: 'Tight Section', heading: HeadingLevel.HEADING_1 }),
+            ...Array.from({ length: 10 }, (_, i) =>
+              para('Narrow margin paragraph ' + i + '. ' + lorem.repeat(2))
+            ),
+          ],
+        },
+        {
+          properties: {
+            page: { margin: { top: 1440, right: 1440, bottom: 1440, left: 1440 } },
+          },
+          headers: { default: new Header({ children: [para('SECTION TWO')] }) },
+          children: [
+            new Paragraph({ text: 'Wide Section', heading: HeadingLevel.HEADING_1 }),
+            ...Array.from({ length: 6 }, (_, i) =>
+              para('Inch margin paragraph ' + i + '. ' + lorem.repeat(2))
+            ),
+          ],
+        },
+      ],
+    })
+  );
+}
+
 /* ---------------- 8. hyperlinks and unusual font ---------------- */
 async function links() {
   await save(
@@ -513,6 +554,7 @@ await report();
 await landscape();
 await legal();
 await letterhead();
+await twoSections();
 await links();
 await withImages();
 await directResume();

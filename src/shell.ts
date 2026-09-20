@@ -1,5 +1,6 @@
 import type { Doc } from './model';
-import { contentHeight, contentWidth, isTable } from './model';
+import type { PageSetup } from './model';
+import { contentHeight, contentWidth, isTable, sectionsOf } from './model';
 import { docEl, pages } from './render';
 import { styleOf } from './styles';
 import { currentPageSetup, pageCount } from './paginate';
@@ -268,6 +269,30 @@ function renderFiles(): void {
   }
 }
 
+/**
+ * A page's own geometry, read back from the custom properties the paginator
+ * wrote on it. Reading the element rather than the model means the panel
+ * cannot disagree with what is on screen.
+ */
+function geometryOf(pageEl: HTMLElement | undefined): PageSetup | null {
+  if (!pageEl) return null;
+  const cs = getComputedStyle(pageEl);
+  const px = (name: string) => parseFloat(cs.getPropertyValue(name));
+  const width = px('--page-w');
+  const height = px('--page-h');
+  if (!Number.isFinite(width) || !Number.isFinite(height)) return null;
+  return {
+    width,
+    height,
+    margins: {
+      top: px('--pad-t') || 0,
+      right: px('--pad-r') || 0,
+      bottom: px('--pad-b') || 0,
+      left: px('--pad-l') || 0,
+    },
+  };
+}
+
 /** A row of key/value metadata, as used by PAGE SETUP. */
 function setupRow(label: string, value: string): HTMLElement {
   const row = el('div', 'setup-row');
@@ -315,11 +340,24 @@ export function updateRail(
     ).toUpperCase();
   }
 
-  const setup = currentPageSetup();
+  // The page the caret is on, not the document: a document with two
+  // sections has two page setups, and the panel should describe the one
+  // being looked at.
+  const here = pages()[currentPageIndex()];
+  const setup = geometryOf(here) ?? currentPageSetup();
+  const sectionCount = sectionsOf(doc).length;
   if (ui.setup) {
     ui.setup.textContent = '';
     ui.setup.appendChild(el('div', 'rail-label', 'PAGE SETUP'));
     const inches = (n2: number) => (n2 / 96).toFixed(2).replace(/\.00$/, '');
+    if (sectionCount > 1) {
+      ui.setup.appendChild(
+        setupRow(
+          'Section',
+          `${(Number(here?.dataset.section ?? 0) || 0) + 1} of ${sectionCount}`
+        )
+      );
+    }
     ui.setup.appendChild(
       setupRow(
         setup.width === 816 && setup.height === 1056 ? 'US Letter' : 'Custom',
@@ -418,10 +456,16 @@ export function updateGutter(currentPage: number): void {
     g.appendChild(lead);
 
     if (i < list.length - 1) {
-      const rule = el('div', 'gutter-break');
+      // A break where the section changes is a different kind of break, and
+      // saying so is the only way the reader learns why the margins moved.
+      const next = list[i + 1] as HTMLElement;
+      const crosses = (next.dataset.section ?? '0') !== (page.dataset.section ?? '0');
+      const rule = el('div', 'gutter-break' + (crosses ? ' section' : ''));
       rule.style.top = top + r.height + 18 + 'px';
       rule.appendChild(el('span', 'gutter-break-line'));
-      rule.appendChild(el('span', 'gutter-break-label', 'PAGE BREAK'));
+      rule.appendChild(
+        el('span', 'gutter-break-label', crosses ? 'SECTION BREAK' : 'PAGE BREAK')
+      );
       rule.appendChild(el('span', 'gutter-break-line'));
       g.appendChild(rule);
     }

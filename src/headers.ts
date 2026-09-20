@@ -1,5 +1,5 @@
-import type { Doc, HFVariant, ParagraphBlock } from './model';
-import { hfFor, hfVariant } from './model';
+import type { Doc, HFVariant, ParagraphBlock, Section } from './model';
+import { contentWidth, hfFor, hfVariant, sectionsOf } from './model';
 import { makeBlockEl, measureEl, pageContent, pages, readBlockHtml } from './render';
 
 /**
@@ -90,8 +90,8 @@ function slot(page: HTMLElement, cls: string): HTMLElement {
 }
 
 export function hasHeaderOrFooter(doc: Doc): boolean {
-  const any = (s?: Record<string, unknown>) => !!s && Object.keys(s).length > 0;
-  return any(doc.headers) || any(doc.footers);
+  if (anyIn(doc.headers) || anyIn(doc.footers)) return true;
+  return sectionsOf(doc).some((s) => anyIn(s.headers) || anyIn(s.footers));
 }
 
 /* ------------------------------------------------------------------ *
@@ -103,10 +103,32 @@ export interface HFHeights {
   footer: Record<HFVariant, number>;
 }
 
+/** One entry per section: a section can have its own header and its own width. */
+export type HFTable = HFHeights[];
+
 const EMPTY: HFHeights = {
   header: { default: 0, first: 0, even: 0 },
   footer: { default: 0, first: 0, even: 0 },
 };
+
+export function emptyHFTable(): HFTable {
+  return [{ header: { ...EMPTY.header }, footer: { ...EMPTY.footer } }];
+}
+
+/** The header and footer a section uses, falling back to the document's. */
+function setsFor(doc: Doc, section: Section): {
+  headers: Doc['headers'];
+  footers: Doc['footers'];
+} {
+  return {
+    headers: section.headers ?? (section.startId === null ? doc.headers : undefined),
+    footers: section.footers ?? (section.startId === null ? doc.footers : undefined),
+  };
+}
+
+function anyIn(s?: Record<string, unknown>): boolean {
+  return !!s && Object.keys(s).length > 0;
+}
 
 /**
  * Measure each variant once, off-screen. Three measurements rather than one
@@ -114,43 +136,54 @@ const EMPTY: HFHeights = {
  * the only thing that varies is a field's text, which is handled by the
  * second pagination pass.
  */
-export function measureHF(doc: Doc, contentW: number, totalPages: number): HFHeights {
-  if (!hasHeaderOrFooter(doc)) return EMPTY;
-  const m = measureEl();
-  const prevWidth = m.style.width;
-  m.style.width = contentW + 'px';
-
-  const out: HFHeights = {
+export function measureHF(doc: Doc, totalPages: number): HFTable {
+  const sections = sectionsOf(doc);
+  const table: HFTable = sections.map(() => ({
     header: { default: 0, first: 0, even: 0 },
     footer: { default: 0, first: 0, even: 0 },
-  };
+  }));
+  if (!hasHeaderOrFooter(doc)) return table;
 
-  for (const variant of ['default', 'first', 'even'] as HFVariant[]) {
-    for (const which of ['header', 'footer'] as const) {
-      const blocks = hfFor(
-        which === 'header' ? doc.headers : doc.footers,
-        variant
-      );
-      if (blocks.length === 0) continue;
-      const box = document.createElement('div');
-      box.className = which === 'header' ? 'page-header' : 'page-footer';
-      box.style.position = 'static';
-      box.appendChild(
-        buildBlocks(blocks, { page: totalPages, pages: totalPages, title: doc.title })
-      );
-      m.appendChild(box);
-      out[which][variant] = box.getBoundingClientRect().height;
-      box.remove();
+  const m = measureEl();
+  const prevWidth = m.style.width;
+
+  sections.forEach((section, si) => {
+    const sets = setsFor(doc, section);
+    // Measured at the section's own width: a header that wraps to two lines
+    // in a narrow section takes twice the space out of that section's body.
+    m.style.width = contentWidth(section.page) + 'px';
+    for (const variant of ['default', 'first', 'even'] as HFVariant[]) {
+      for (const which of ['header', 'footer'] as const) {
+        const blocks = hfFor(which === 'header' ? sets.headers : sets.footers, variant);
+        if (blocks.length === 0) continue;
+        const box = document.createElement('div');
+        box.className = which === 'header' ? 'page-header' : 'page-footer';
+        box.style.position = 'static';
+        box.appendChild(
+          buildBlocks(blocks, { page: totalPages, pages: totalPages, title: doc.title })
+        );
+        m.appendChild(box);
+        table[si][which][variant] = box.getBoundingClientRect().height;
+        box.remove();
+      }
     }
-  }
+  });
 
   m.style.width = prevWidth;
-  return out;
+  return table;
 }
 
 /** Space the header and footer take from the body on a given page. */
-export function hfSpace(doc: Doc, heights: HFHeights, pageIndex: number): number {
-  const v = hfVariant(doc, pageIndex);
+export function hfSpace(
+  doc: Doc,
+  table: HFTable,
+  pageIndex: number,
+  sectionIndex = 0
+): number {
+  const sections = sectionsOf(doc);
+  const section = sections[sectionIndex] ?? sections[0];
+  const heights = table[sectionIndex] ?? table[0] ?? EMPTY;
+  const v = hfVariant(doc, pageIndex, section);
   return heights.header[v] + heights.footer[v];
 }
 
@@ -212,7 +245,9 @@ export function readHF(doc: Doc): boolean {
       const first = rows[0].dataset.hf;
       if (!first) continue;
       const [variant, which] = first.split(':') as [HFVariant, 'header' | 'footer'];
-      const set = which === 'header' ? doc.headers : doc.footers;
+      const section = sectionsOf(doc)[sectionOfPage(page)];
+      const sets = section ? setsFor(doc, section) : { headers: doc.headers, footers: doc.footers };
+      const set = which === 'header' ? sets.headers : sets.footers;
       if (!set) continue;
       const target = set[variant] ?? set.default;
       if (!target) continue;
@@ -231,10 +266,16 @@ export function readHF(doc: Doc): boolean {
   return changed;
 }
 
-export function renderHF(doc: Doc, heights: HFHeights): void {
+/** The section a page on screen was laid out in, as the paginator tagged it. */
+export function sectionOfPage(pageEl: HTMLElement | null | undefined): number {
+  return Number(pageEl?.dataset.section ?? 0) || 0;
+}
+
+export function renderHF(doc: Doc, table: HFTable): void {
   const list = pages();
   const total = list.length;
   const on = hasHeaderOrFooter(doc);
+  const sections = sectionsOf(doc);
 
   list.forEach((page, i) => {
     if (!on) {
@@ -242,11 +283,15 @@ export function renderHF(doc: Doc, heights: HFHeights): void {
       page.querySelector(':scope > .page-footer')?.remove();
       return;
     }
-    const v = hfVariant(doc, i);
+    const si = sectionOfPage(page);
+    const section = sections[si] ?? sections[0];
+    const heights = table[si] ?? table[0] ?? EMPTY;
+    const sets = setsFor(doc, section);
+    const v = hfVariant(doc, i, section);
     const ctx: FieldContext = { page: i + 1, pages: total, title: doc.title };
 
     for (const which of ['header', 'footer'] as const) {
-      const blocks = hfFor(which === 'header' ? doc.headers : doc.footers, v);
+      const blocks = hfFor(which === 'header' ? sets.headers : sets.footers, v);
       const cls = which === 'header' ? 'page-header' : 'page-footer';
       if (blocks.length === 0) {
         page.querySelector(':scope > .' + cls)?.remove();
@@ -261,7 +306,7 @@ export function renderHF(doc: Doc, heights: HFHeights): void {
 
     // The body box shrinks by whatever the two take.
     pageContent(page).style.height =
-      'calc(var(--content-h) - ' + hfSpace(doc, heights, i) + 'px)';
+      'calc(var(--content-h) - ' + hfSpace(doc, table, i, si) + 'px)';
   });
 
   if (!on) {

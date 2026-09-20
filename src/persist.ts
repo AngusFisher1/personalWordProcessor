@@ -1,9 +1,11 @@
 import type {
   Block,
   Doc,
+  HeaderFooterSet,
   MarginKey,
   PageSetup,
   ParagraphBlock,
+  Section,
   TableBlock,
 } from './model';
 import { MARGINS, isStyleId, newId, pageSetup } from './model';
@@ -168,7 +170,59 @@ function coerce(raw: unknown): Doc {
     title: typeof o.title === 'string' && o.title ? o.title : 'Untitled',
     page: coercePage(o),
     blocks: blocks.length ? blocks : [{ id: newId(), styleId: 'Body', html: '' }],
+    ...coerceExtras(o),
   };
+}
+
+/**
+ * Everything on a document that is not its blocks.
+ *
+ * Dropping these on the way back in is silent: the document reloads, looks
+ * almost right, and its letterhead is simply gone. Each one is validated
+ * rather than trusted, because this same path reads a file off disk.
+ */
+function coerceExtras(o: Record<string, unknown>): Partial<Doc> {
+  const out: Partial<Doc> = {};
+  const hf = (raw: unknown): HeaderFooterSet | undefined => {
+    if (!raw || typeof raw !== 'object') return undefined;
+    const set: HeaderFooterSet = {};
+    for (const v of ['default', 'first', 'even'] as const) {
+      const list = (raw as Record<string, unknown>)[v];
+      if (!Array.isArray(list)) continue;
+      set[v] = list.map((b, i) => coerceParagraph(b, `${v} header block ${i}`));
+    }
+    return Object.keys(set).length ? set : undefined;
+  };
+
+  const headers = hf(o.headers);
+  const footers = hf(o.footers);
+  if (headers) out.headers = headers;
+  if (footers) out.footers = footers;
+  if (o.titlePage === true) out.titlePage = true;
+  if (o.evenOdd === true) out.evenOdd = true;
+  if (typeof o.headerDistance === 'number') out.headerDistance = o.headerDistance;
+  if (typeof o.footerDistance === 'number') out.footerDistance = o.footerDistance;
+
+  if (Array.isArray(o.sections) && o.sections.length > 1) {
+    const sections: Section[] = o.sections.map((raw, i) => {
+      const r = (raw ?? {}) as Record<string, unknown>;
+      const sh = hf(r.headers);
+      const sf = hf(r.footers);
+      return {
+        id: typeof r.id === 'string' && r.id ? r.id : 'sect' + i,
+        startId: typeof r.startId === 'string' ? r.startId : null,
+        page: coercePage(r),
+        ...(sh ? { headers: sh } : {}),
+        ...(sf ? { footers: sf } : {}),
+        ...(r.titlePage === true ? { titlePage: true } : {}),
+        ...(r.continuous === true ? { continuous: true } : {}),
+      };
+    });
+    // The first section starts the document whatever it says it starts at.
+    sections[0].startId = null;
+    out.sections = sections;
+  }
+  return out;
 }
 
 function coerceParagraph(raw: unknown, where: string): ParagraphBlock {

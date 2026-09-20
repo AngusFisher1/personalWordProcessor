@@ -129,6 +129,7 @@ All geometry is in CSS pixels at 96px per inch, and the numbers are exact.
 | `export-library.ts` | the whole library, in one archive |
 | `history.ts` | undo/redo stack |
 | `export-docx.ts` | .docx generation, and the choice between the two paths |
+| `headers.ts` | header and footer measurement, fields, per-section rendering |
 | `docx-import.ts` | OOXML to model: paragraphs, tables, styles, numbering, sections |
 | `docx-infer.ts` | what a paragraph is when the document does not say |
 | `docx-package.ts` | the preservation vault: unzip, repack, keep the original |
@@ -357,6 +358,49 @@ and columns, with the column operations disabled on a table containing merged
 cells - a grid that no longer describes the rows is what makes Word offer to
 repair the file. Cell selection spanning multiple cells is out of scope.
 
+### Sections
+
+A Word document is a sequence of sections, each with its own page size,
+margins and headers. Reading only the last `w:sectPr` - which is what a
+single page setup amounts to - lays the whole document out with the geometry
+of its final few paragraphs.
+
+That is not a theoretical problem. Across 63 real documents, 11 have more
+than one section; none vary the page size, three vary the margins, and on
+those three the body is set at about three-eighths of an inch and the
+trailing section at a half or a full inch. Rendering the first at the last
+one's margins moves every line break on the page.
+
+So geometry is a property of position, not of the document:
+
+- A `w:sectPr` inside a paragraph's properties **ends** a section at that
+  paragraph; the body-level one describes the last. A section whose first
+  block does not exist - the break was on the final paragraph - is dropped.
+- Which section a block is in is resolved by **walking the blocks in order**,
+  not stored on the block and not looked up by id. A paragraph typed into the
+  middle of section two is in section two; the model does not know about it
+  yet and will not until the next save.
+- Every `.page` element carries its own `--page-w`, `--pad-*` and derived
+  `--content-*`, written by the paginator, so two sections render two page
+  sizes with nothing global consulted. Custom-property substitution happens
+  where a property is *declared*, which is why the derived pair is written
+  onto the page rather than inherited from `:root`.
+- A page cannot straddle two geometries, so a section boundary forces a page
+  break, exactly like `pageBreakBefore`. A **continuous** break is therefore
+  folded into the section above it rather than drawn with margins that cannot
+  apply.
+- Headers and footers are per section too, measured at that section's own
+  width, and an edit is written back to the part that section references.
+- A single-section document - nearly all of them - short-circuits every one
+  of these functions before they touch the DOM. The indexing walk is
+  O(blocks), and the per-keystroke check must not pay for a feature the open
+  document does not use.
+
+The gutter labels a break that crosses sections `SECTION BREAK` in the
+accent, and the rail's PAGE SETUP describes the page the caret is on rather
+than the document, reading the geometry back off the page element so the
+panel cannot disagree with what is on screen.
+
 ### The preservation vault
 
 The original package is kept in memory. On export only the body of
@@ -470,7 +514,11 @@ Notes:
 ## Storage
 
 Autosaves to `localStorage` on a 1s debounce under `wp:doc:<id>`, with an index
-at `wp:docs`. If storage is full the save fails visibly in the toolbar rather
+at `wp:docs`. Everything on a document that is not its blocks - headers,
+footers, title-page and even/odd flags, sections - is validated and carried
+back in on load; dropping any of it is silent, and a document that reloads
+looking almost right with its letterhead simply gone is the worst kind of
+bug to notice late. If storage is full the save fails visibly in the toolbar rather
 than silently — export JSON at that point to keep your work. JSON export writes
 the `Doc` verbatim; import validates that `blocks` is an array and every
 `styleId` is known before replacing the document. Markdown, HTML and the
@@ -524,9 +572,10 @@ problem Markdown and .docx do not already solve here.
 - **Tables on paste are dropped**, text and all - worth knowing if you paste a
   resume that uses a table for layout. A table that arrives in a .docx is read
   and edited; one that arrives on the clipboard is not.
-- Columns, text boxes, footnotes, PDF import, section breaks with differing
-  orientation, collaboration, spell check beyond the browser's own, mobile
-  layout, any backend.
+- **A continuous section break.** It shares a page with the section before
+  it, and a page has one geometry, so it folds into that section instead.
+- Columns, text boxes, footnotes, PDF import, collaboration, spell check
+  beyond the browser's own, mobile layout, any backend.
 
 Undo granularity is coarser than Word's: typing coalesces into one entry per
 500ms of activity, and each structural change is one entry.

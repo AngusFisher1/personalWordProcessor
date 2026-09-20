@@ -1,5 +1,5 @@
 import type { Block, Doc, ParagraphBlock, TableBlock } from './model';
-import { isTable } from './model';
+import { isTable, sectionsOf } from './model';
 import type { RunProp, Vault } from './docx-package';
 import { addWarning } from './docx-package';
 
@@ -282,9 +282,20 @@ function paragraphXml(b: ParagraphBlock, vault: Vault): string {
  */
 export function buildHeaderParts(doc: Doc, vault: Vault): Map<string, string> {
   const out = new Map<string, string>();
+  const sections = sectionsOf(doc);
   for (const [key, path] of vault.hfParts) {
-    const [which, variant] = key.split(':');
-    const set = which === 'headerReference' ? doc.headers : doc.footers;
+    // "headerReference:first" for the first section, "…:first@2" for the
+    // third: each section references its own parts, and an edit has to be
+    // written back to the part it came from.
+    const [which, rest] = key.split(':');
+    const [variant, tag] = rest.split('@');
+    const si = tag ? Number(tag) : 0;
+    const section = sections[si];
+    if (!section) continue;
+    const set =
+      which === 'headerReference'
+        ? (section.headers ?? (si === 0 ? doc.headers : undefined))
+        : (section.footers ?? (si === 0 ? doc.footers : undefined));
     const blocks = set?.[variant as 'default' | 'first' | 'even'];
     if (!blocks || blocks.length === 0) continue;
     const dirty = blocks.some((b) => vault.blockHtml.get(b.id) !== b.html);

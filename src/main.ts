@@ -9,10 +9,10 @@ import {
   newBlock,
   newId,
   uniformMargins,
-  contentWidth,
+  sectionsOf,
 } from './model';
 import { DOC_FONT, STYLES, injectStyleSheet } from './styles';
-import { blockEl, blocksIn, docEl, readModel, renderAll } from './render';
+import { blockEl, blocksIn, docEl, pages, readModel, renderAll } from './render';
 import {
   clearHeightCache,
   currentPageSetup,
@@ -23,6 +23,7 @@ import {
   paginateIfNeeded,
   setHeaderFooterSpace,
   setPageSetup,
+  setSections,
 } from './paginate';
 import {
   bindShortcuts,
@@ -32,8 +33,9 @@ import {
   toggleInline,
 } from './commands';
 import { caretAtStart, getCaret, placeCaret } from './caret';
-import type { HFHeights } from './headers';
+import type { HFTable } from './headers';
 import {
+  emptyHFTable,
   firstHFBlock,
   hasHeaderOrFooter,
   hfSpace,
@@ -41,6 +43,7 @@ import {
   measureHF,
   readHF,
   renderHF,
+  sectionOfPage,
   setEditingHF,
 } from './headers';
 import { closeFind, isFindOpen, openFind, refreshFind, selectedText } from './findbar';
@@ -443,8 +446,19 @@ function setPalette(id: string): void {
 
 function setMarginPreset(key: MarginKey): void {
   // Only the margins change; an imported page size is left alone.
-  doc.page = { ...doc.page, margins: uniformMargins(MARGINS[key]) };
+  const margins = uniformMargins(MARGINS[key]);
+  doc.page = { ...doc.page, margins };
+  // Every section, not only the first. Choosing a margin from the toolbar is
+  // a statement about the document, and leaving a trailing imported section
+  // on its old margins would make the change look like it half worked.
+  if (doc.sections) {
+    doc.sections = doc.sections.map((sct) => ({
+      ...sct,
+      page: { ...sct.page, margins },
+    }));
+  }
   setPageSetup(doc.page);
+  installSections(doc);
   reflowNow();
   scheduleSave();
 }
@@ -574,26 +588,46 @@ function reflowNow(): void {
  * Two passes, then the second result stands.
  * ------------------------------------------------------------------ */
 
-let hfHeights: HFHeights = {
-  header: { default: 0, first: 0, even: 0 },
-  footer: { default: 0, first: 0, even: 0 },
-};
+let hfHeights: HFTable = emptyHFTable();
 
-function sameHeights(a: HFHeights, b: HFHeights): boolean {
-  return (['default', 'first', 'even'] as const).every(
-    (v) =>
-      Math.abs(a.header[v] - b.header[v]) < 0.5 &&
-      Math.abs(a.footer[v] - b.footer[v]) < 0.5
+function sameHeights(a: HFTable, b: HFTable): boolean {
+  if (a.length !== b.length) return false;
+  return a.every((sa, i) =>
+    (['default', 'first', 'even'] as const).every(
+      (v) =>
+        Math.abs(sa.header[v] - b[i].header[v]) < 0.5 &&
+        Math.abs(sa.footer[v] - b[i].footer[v]) < 0.5
+    )
   );
 }
 
+/**
+ * Tell the paginator about this document's sections.
+ *
+ * A continuous section is deliberately not registered as a page start: it
+ * shares a page with what came before, and a page can only have one
+ * geometry, so it folds into the section above it rather than being drawn
+ * with margins that cannot apply.
+ */
+function installSections(d: Doc): void {
+  const list = sectionsOf(d);
+  if (list.length <= 1) {
+    setSections([], new Map());
+    return;
+  }
+  const starts = new Map<string, number>();
+  list.forEach((sct, i) => {
+    if (sct.startId && !sct.continuous) starts.set(sct.startId, i);
+  });
+  setSections(list.map((sct) => sct.page), starts);
+}
+
 function layout(opts?: { fromPage?: number }): void {
-  const width = contentWidth(doc.page);
-  hfHeights = measureHF(doc, width, Math.max(1, pageCount()));
+  hfHeights = measureHF(doc, Math.max(1, pageCount()));
   paginate(opts);
   renderHF(doc, hfHeights);
 
-  const after = measureHF(doc, width, pageCount());
+  const after = measureHF(doc, pageCount());
   if (!sameHeights(hfHeights, after)) {
     hfHeights = after;
     paginate();
@@ -772,7 +806,8 @@ function openDoc(d: Doc): void {
   setPageSetup(d.page);
   if (ui.title) ui.title.value = d.title;
   lastWords = -1;
-  setHeaderFooterSpace((i) => hfSpace(doc, hfHeights, i));
+  setHeaderFooterSpace((i) => hfSpace(doc, hfHeights, i, sectionOfPage(pages()[i])));
+  installSections(doc);
   renderAll(doc, docEl());
   normalize();
   ensureTrailingBlock();

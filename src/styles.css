@@ -441,6 +441,11 @@ body.col-resizing { user-select: none; }
   color: var(--dim);
   opacity: 0.75;
 }
+/* A section break is the one break the reader has to notice: it is where the
+   page geometry changes. */
+.gutter-break.section .gutter-break-label { color: var(--acc); }
+.gutter-break.section .gutter-break-line { background: var(--acc); opacity: 0.5; }
+
 
 /* ---------- spine: the document map ---------- */
 

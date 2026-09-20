@@ -5,6 +5,7 @@ import type {
   HeaderFooterSet,
   PageSetup,
   ParagraphBlock,
+  Section,
   StyleId,
   TableBlock,
   TableCell,
@@ -784,9 +785,19 @@ export async function importDocx(
   };
   registerMedia(parts);
   const counters = new ListCounters();
-  const page = readSectPr(kid(body, 'sectPr'));
+  // The FIRST section's geometry, found before the walk because table
+  // widths are measured against it. Using the body-level sectPr here lays
+  // tables out against the margins of the document's last few paragraphs.
+  const firstSectPr =
+    Array.from(body.childNodes)
+      .filter((n): n is Element => n.nodeType === 1 && (n as Element).localName === 'p')
+      .map((pEl) => kid(kid(pEl, 'pPr'), 'sectPr'))
+      .find((x): x is Element => !!x) ?? kid(body, 'sectPr');
+  const page = readSectPr(firstSectPr);
 
   const blocks: Block[] = [];
+  /** Inline w:sectPr found during the walk, in document order. */
+  const sectBreaks: { sectPr: Element; afterBlockId: string }[] = [];
   const signals: ParaSignals[] = [];
   const pStyles: (string | null)[] = [];
   /** Parallel to `signals`, so inference can write its answer back. */
@@ -957,6 +968,11 @@ export async function importDocx(
       const id = bodyBlockId(index);
       blocks.push(readParagraph(child, id));
       lastBlockId = id;
+      // A w:sectPr inside a paragraph's properties ends a section AT that
+      // paragraph: the properties describe the section just closed, and the
+      // next block begins the next one.
+      const inlineSect = kid(kid(child, 'pPr'), 'sectPr');
+      if (inlineSect) sectBreaks.push({ sectPr: inlineSect, afterBlockId: id });
       continue;
     }
 
@@ -1060,25 +1076,83 @@ export async function importDocx(
     return out;
   };
 
-  for (const [which, set] of [
-    ['headerReference', headers],
-    ['footerReference', footers],
-  ] as [string, HeaderFooterSet][]) {
-    for (const ref of kids(sectPr, which)) {
-      const type = (wAttr(ref, 'type') ?? 'default') as HFVariant;
-      const rid = rAttr(ref, 'id');
-      const target = rid ? rels.get(rid) : null;
-      if (!target) continue;
-      const partPath = target.startsWith('/')
-        ? target.slice(1)
-        : 'word/' + target.replace(/^\.\//, '');
-      vault.hfParts.set(`${which}:${type}`, partPath);
-      const read = readPart(partPath, `${type}-${which[0]}-`);
-      if (read.length > 0) set[type === 'even' ? 'even' : type === 'first' ? 'first' : 'default'] = read;
+  /**
+   * Read one section's header and footer references.
+   *
+   * Sections after the first get their own key suffix, both in the vault -
+   * where the part path is what an edit is written back to - and in the block
+   * ids, which have to stay unique across the whole document or the caret and
+   * the finder would see two blocks claiming the same id.
+   */
+  const readHFRefs = (
+    from: Element | null,
+    sectionIndex: number
+  ): { headers: HeaderFooterSet; footers: HeaderFooterSet } => {
+    const h: HeaderFooterSet = {};
+    const f: HeaderFooterSet = {};
+    if (!from) return { headers: h, footers: f };
+    const tag = sectionIndex === 0 ? '' : '@' + sectionIndex;
+    for (const [which, set] of [
+      ['headerReference', h],
+      ['footerReference', f],
+    ] as [string, HeaderFooterSet][]) {
+      for (const ref of kids(from, which)) {
+        const type = (wAttr(ref, 'type') ?? 'default') as HFVariant;
+        const rid = rAttr(ref, 'id');
+        const target = rid ? rels.get(rid) : null;
+        if (!target) continue;
+        const partPath = target.startsWith('/')
+          ? target.slice(1)
+          : 'word/' + target.replace(/^\.\//, '');
+        vault.hfParts.set(`${which}:${type}${tag}`, partPath);
+        const read = readPart(partPath, `${type}-${which[0]}${tag}-`);
+        if (read.length > 0) {
+          set[type === 'even' ? 'even' : type === 'first' ? 'first' : 'default'] = read;
+        }
+      }
     }
+    return { headers: h, footers: f };
+  };
+
+  /* ---- sections ---- */
+
+  // One section per w:sectPr. An inline one describes the section it closes;
+  // the body-level one describes the last. A section whose first block does
+  // not exist - the break was on the final paragraph - is dropped, because a
+  // section with nothing in it has no page to lay out.
+  const blockIndex = new Map(blocks.map((b, i) => [b.id, i]));
+  const sectionParts: { sectPr: Element | null; startId: string | null }[] = [];
+  let nextStart: string | null = null;
+  for (const brk of sectBreaks) {
+    sectionParts.push({ sectPr: brk.sectPr, startId: nextStart });
+    const at = blockIndex.get(brk.afterBlockId);
+    nextStart = at === undefined ? null : (blocks[at + 1]?.id ?? null);
+    if (nextStart === null) break; // nothing follows the break
+  }
+  if (nextStart !== null || sectionParts.length === 0) {
+    sectionParts.push({ sectPr: kid(body, 'sectPr'), startId: nextStart });
   }
 
-  const titlePage = !!kid(sectPr, 'titlePg');
+  const sections: Section[] = sectionParts.map((sp, i) => {
+    const hf = readHFRefs(sp.sectPr, i);
+    const type = wAttr(kid(sp.sectPr, 'type'), 'val');
+    return {
+      id: 'sect' + i,
+      startId: sp.startId,
+      page: readSectPr(sp.sectPr),
+      ...(Object.keys(hf.headers).length ? { headers: hf.headers } : {}),
+      ...(Object.keys(hf.footers).length ? { footers: hf.footers } : {}),
+      ...(kid(sp.sectPr, 'titlePg') ? { titlePage: true } : {}),
+      ...(type === 'continuous' ? { continuous: true } : {}),
+    };
+  });
+
+  // The first section is what a reader sees first, and it is what everything
+  // that is not section-aware falls back to.
+  const first = sections[0];
+  Object.assign(headers, first.headers ?? {});
+  Object.assign(footers, first.footers ?? {});
+  const titlePage = !!first.titlePage;
   const settings = partText(parts, 'word/settings.xml') ?? '';
   const evenOdd = /<w:evenAndOddHeaders/.test(settings);
 
@@ -1093,8 +1167,12 @@ export async function importDocx(
   const doc: Doc = {
     id: newId(),
     title: fileName.replace(/\.docx$/i, '') || 'Untitled',
-    page,
+    // The first section's geometry, not the last. `page` is what a document
+    // with one section is laid out with, and the document opens in its
+    // first section either way.
+    page: sections[0].page,
     blocks,
+    ...(sections.length > 1 ? { sections } : {}),
     ...(Object.keys(headers).length ? { headers } : {}),
     ...(Object.keys(footers).length ? { footers } : {}),
     ...(titlePage ? { titlePage } : {}),

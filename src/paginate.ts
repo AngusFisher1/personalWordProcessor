@@ -8,6 +8,7 @@ import {
   isContinuation,
   isTableEl,
   logicalGroups,
+  logicalIdOf,
   makeBlockEl,
   measureEl,
   mergeGroup,
@@ -23,16 +24,24 @@ import { STYLES, styleClass, styleOf } from './styles';
 
 let page: PageSetup = pageSetup('narrow');
 
+/** Write a page geometry onto an element's custom properties. */
+function writeGeometry(style: CSSStyleDeclaration, p: PageSetup): void {
+  style.setProperty('--page-w', p.width + 'px');
+  style.setProperty('--page-h', p.height + 'px');
+  style.setProperty('--pad-t', p.margins.top + 'px');
+  style.setProperty('--pad-r', p.margins.right + 'px');
+  style.setProperty('--pad-b', p.margins.bottom + 'px');
+  style.setProperty('--pad-l', p.margins.left + 'px');
+  // Substitution happens where a custom property is DECLARED, so the derived
+  // pair has to be written here too rather than inherited from :root.
+  style.setProperty('--content-w', contentWidth(p) + 'px');
+  style.setProperty('--content-h', contentHeight(p) + 'px');
+}
+
 /** Apply a document's page geometry to the CSS variables the layout reads. */
 export function setPageSetup(p: PageSetup): void {
   page = p;
-  const st = document.documentElement.style;
-  st.setProperty('--page-w', p.width + 'px');
-  st.setProperty('--page-h', p.height + 'px');
-  st.setProperty('--pad-t', p.margins.top + 'px');
-  st.setProperty('--pad-r', p.margins.right + 'px');
-  st.setProperty('--pad-b', p.margins.bottom + 'px');
-  st.setProperty('--pad-l', p.margins.left + 'px');
+  writeGeometry(document.documentElement.style, p);
   clearHeightCache();
 }
 
@@ -40,16 +49,99 @@ export function currentPageSetup(): PageSetup {
   return page;
 }
 
+/* ------------------------------------------------------------------ *
+ * Sections
+ *
+ * A document can have more than one page geometry. Which one applies is a
+ * property of position in the document, not of the document as a whole, so
+ * every page carries its own.
+ *
+ * A single-section document - nearly all of them - short-circuits every
+ * function here before it touches the DOM. The indexing walk is O(blocks),
+ * and the per-keystroke check must not pay for a feature the open document
+ * does not use.
+ * ------------------------------------------------------------------ */
+
+/** Geometry per section index, in document order. */
+let sectionSetups: PageSetup[] = [];
+/** Logical block ids that open a section on a fresh page. */
+let sectionStarts = new Map<string, number>();
+/** Resolved on the last indexing walk. */
+let sectionOfEl = new WeakMap<HTMLElement, number>();
+
+export function hasSections(): boolean {
+  return sectionSetups.length > 1;
+}
+
+/**
+ * Tell the paginator about the document's sections.
+ *
+ * `starts` maps the id of each section's first block to its index. A
+ * continuous section is not listed, because it does not begin a page and
+ * therefore cannot carry a geometry of its own.
+ */
+export function setSections(setups: PageSetup[], starts: Map<string, number>): void {
+  sectionSetups = setups;
+  sectionStarts = starts;
+  sectionOfEl = new WeakMap();
+  clearHeightCache();
+}
+
+/**
+ * Walk the blocks in order and record which section each is in.
+ *
+ * Positional rather than looked up from the model, so a paragraph typed into
+ * the middle of section two is in section two - the model does not know
+ * about it yet, and will not until the next save.
+ */
+function indexSections(root: HTMLElement): void {
+  if (!hasSections()) return;
+  sectionOfEl = new WeakMap();
+  let current = 0;
+  for (const g of logicalGroups(root)) {
+    const at = sectionStarts.get(logicalIdOf(g.head));
+    if (at !== undefined) current = at;
+    sectionOfEl.set(g.head, current);
+    for (const t of g.tails) sectionOfEl.set(t, current);
+  }
+}
+
+function setupOfSection(i: number): PageSetup {
+  return sectionSetups[i] ?? page;
+}
+
+function sectionOfBlock(el: HTMLElement | null | undefined): number {
+  if (!hasSections() || !el) return 0;
+  const known = sectionOfEl.get(el);
+  if (known !== undefined) return known;
+  // A block created since the last walk: it belongs where its page does.
+  const pageEl = el.closest('.page') as HTMLElement | null;
+  return Number(pageEl?.dataset.section ?? 0) || 0;
+}
+
+function setupOfBlock(el: HTMLElement | null | undefined): PageSetup {
+  if (!hasSections()) return page;
+  return setupOfSection(sectionOfBlock(el));
+}
+
+/** The geometry a page on screen was laid out with. */
+function setupOfPage(pageEl: Element | null | undefined): PageSetup {
+  if (!hasSections()) return page;
+  const raw = (pageEl as HTMLElement | null)?.dataset.section;
+  return setupOfSection(Number(raw) || 0);
+}
+
 /**
  * Space available for body text on one page.
  *
- * NOT a constant. A header and footer take their height out of it, and which
- * ones a page uses depends on its number - so every comparison has to go
- * through here. A stray hardcoded value produces a one-page-off error that
- * only shows up in long documents.
+ * NOT a constant. A header and footer take their height out of it, which ones
+ * a page uses depends on its number, and the content box itself depends on
+ * the section - so every comparison has to go through here. A stray
+ * hardcoded value produces a one-page-off error that only shows up in long
+ * documents.
  */
-function limitFor(pageIndex: number): number {
-  return contentHeight(page) - hfTaken(pageIndex);
+function limitFor(pageIndex: number, setup: PageSetup = page): number {
+  return contentHeight(setup) - hfTaken(pageIndex);
 }
 
 /** Set by the caller, since the paginator does not own the document. */
@@ -57,10 +149,6 @@ let hfTaken: (pageIndex: number) => number = () => 0;
 
 export function setHeaderFooterSpace(fn: (pageIndex: number) => number): void {
   hfTaken = fn;
-}
-
-function limitW(): number {
-  return contentWidth(page);
 }
 
 /** How far a keep-with-next run may cascade before we let it break. */
@@ -111,7 +199,12 @@ function keyFor(el: HTMLElement): string {
   const split =
     (el.classList.contains('split-cont') ? 'c' : '') +
     (el.classList.contains('split-more') ? 'm' : '');
-  return limitW() + '|' + styleOf(el) + '|' + split + '|' + el.innerHTML;
+  // Keyed on the width the block is actually laid out at, which is its
+  // section's, not the document's: two sections with different margins wrap
+  // the same sentence at different points.
+  return (
+    contentWidth(setupOfBlock(el)) + '|' + styleOf(el) + '|' + split + '|' + el.innerHTML
+  );
 }
 
 /**
@@ -211,7 +304,7 @@ function heightOf(el: HTMLElement): number {
 
 function measureClone(el: HTMLElement): number {
   const m = measureEl();
-  m.style.width = limitW() + 'px';
+  m.style.width = contentWidth(setupOfBlock(el)) + 'px';
   const clone = el.cloneNode(true) as HTMLElement;
   m.appendChild(clone);
   const h = clone.offsetHeight;
@@ -549,8 +642,15 @@ function assign(
   let pulledFor = -1;
 
   const cur = () => out[out.length - 1];
+  /**
+   * The section this page renders: the one its first block belongs to, or,
+   * on a page with nothing on it yet, the one the next block belongs to.
+   * A page cannot straddle two geometries, so the first block on it decides.
+   */
+  const setupNow = () =>
+    setupOfBlock(cur()[0]?.g.head ?? groups[gi]?.head);
   // The limit follows the page being filled, not the document.
-  const limitNow = () => limitFor(firstPage + out.length - 1);
+  const limitNow = () => limitFor(firstPage + out.length - 1, setupNow());
   const breakPage = (needed: number) => {
     need[out.length - 1] = needed;
     out.push([]);
@@ -563,7 +663,9 @@ function assign(
     const info = infoOf(g.head);
     const lines = lineCountOf(info);
 
-    if (from === 0 && def.pageBreakBefore && cur().length > 0) {
+    const opensSection =
+      from === 0 && hasSections() && sectionStarts.has(logicalIdOf(g.head));
+    if (from === 0 && (def.pageBreakBefore || opensSection) && cur().length > 0) {
       breakPage(0);
       continue;
     }
@@ -863,6 +965,7 @@ export function paginate(opts?: { fromPage?: number }): void {
     else break;
   }
 
+  indexSections(root);
   const all = logicalGroups(root);
   const anchor = firstBlock(before[from]);
   let start = anchor ? all.findIndex((g) => g.head === anchor) : 0;
@@ -889,6 +992,13 @@ export function paginate(opts?: { fromPage?: number }): void {
     // What the next content needs in order to also fit here. The cheap check
     // reads this instead of guessing.
     page.dataset.needh = String(Math.max(0, assigned.need[idx - from] ?? 0));
+    // A page carries its own geometry, so a document with two sections
+    // renders two page sizes without the layout consulting anything global.
+    const si = sectionOfBlock(pieces[0]?.g.head);
+    if (String(si) !== page.dataset.section) {
+      page.dataset.section = String(si);
+      writeGeometry(page.style, setupOfSection(si));
+    }
     idx++;
   }
 
@@ -909,7 +1019,7 @@ export function paginateIfNeeded(): void {
   if (!page) return;
 
   const content = pageContent(page);
-  const limit = limitFor(pages(root).indexOf(page));
+  const limit = limitFor(pages(root).indexOf(page), setupOfPage(page));
   const used = usedHeight(content);
 
   if (used > limit) {
@@ -942,6 +1052,6 @@ export function pageCount(): number {
 
 /** Diagnostics for the acceptance checks: slack left at the foot of each page. */
 export function pageSlack(): number[] {
-  return pages().map((p, i) => limitFor(i) - usedHeight(pageContent(p)));
+  return pages().map((p, i) => limitFor(i, setupOfPage(p)) - usedHeight(pageContent(p)));
 }
 

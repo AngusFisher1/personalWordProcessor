@@ -158,11 +158,82 @@ export interface Doc2Extras {
   /** px from the page edge to the header and footer, from w:pgMar. */
   headerDistance?: number;
   footerDistance?: number;
+  /**
+   * Sections, when the document has more than one. Absent means one section
+   * with `page`, `headers` and `footers`, which is what most documents are
+   * and what everything written before sections existed still deserializes as.
+   */
+  sections?: Section[];
+}
+
+/* ------------------------------------------------------------------ *
+ * Sections
+ *
+ * A Word document is a sequence of sections, each with its own page size,
+ * margins and headers. Reading only the last one - which is what a single
+ * `page` field amounts to - lays the whole document out with the geometry of
+ * its final few paragraphs. On real resumes that is a visible error: a body
+ * set to a half-inch margin rendered at the trailing section's inch.
+ * ------------------------------------------------------------------ */
+
+export interface Section {
+  id: string;
+  /**
+   * The block this section starts at. Null for the first section, which
+   * starts at the top of the document whatever the first block turns out to
+   * be. An id rather than an index, because the blocks around it are edited.
+   */
+  startId: string | null;
+  page: PageSetup;
+  headers?: HeaderFooterSet;
+  footers?: HeaderFooterSet;
+  titlePage?: boolean;
+  /** w:type continuous - shares a page with the section before it. */
+  continuous?: boolean;
+}
+
+/** Always at least one, so callers never branch on whether sections exist. */
+export function sectionsOf(doc: Doc): Section[] {
+  if (doc.sections && doc.sections.length > 0) return doc.sections;
+  return [
+    {
+      id: 'only',
+      startId: null,
+      page: doc.page,
+      headers: doc.headers,
+      footers: doc.footers,
+      titlePage: doc.titlePage,
+    },
+  ];
+}
+
+/**
+ * Which section each block belongs to, by walking the blocks in order.
+ *
+ * Resolved by walking rather than stored, so a section whose first block was
+ * deleted simply merges into the one before it instead of leaving the
+ * document pointing at a block that is not there.
+ */
+export function sectionIndexByBlock(doc: Doc): Map<string, number> {
+  const sections = sectionsOf(doc);
+  const starts = new Map<string, number>();
+  sections.forEach((s, i) => {
+    if (s.startId) starts.set(s.startId, i);
+  });
+  const out = new Map<string, number>();
+  let current = 0;
+  for (const b of doc.blocks) {
+    const at = starts.get(b.id);
+    if (at !== undefined) current = at;
+    out.set(b.id, current);
+  }
+  return out;
 }
 
 /** Which header and footer a given page uses. */
-export function hfVariant(doc: Doc, pageIndex: number): HFVariant {
-  if (pageIndex === 0 && doc.titlePage) return 'first';
+export function hfVariant(doc: Doc, pageIndex: number, section?: Section): HFVariant {
+  const title = section ? section.titlePage : doc.titlePage;
+  if (pageIndex === 0 && title) return 'first';
   if (doc.evenOdd && (pageIndex + 1) % 2 === 0) return 'even';
   return 'default';
 }

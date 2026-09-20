@@ -293,6 +293,15 @@ const IMAGE_CSS =
   '  outline: 1px solid #ccc;\n' +
   '}\n';
 
+/**
+ * Find highlights. The current match is solid and the rest are tinted, so
+ * the eye can tell where it is without losing sight of the others. These are
+ * plain spans the sanitizer unwraps, so a highlight can never be saved.
+ */
+const FIND_CSS =
+  '.blk span.find-hit { background: rgba(217, 123, 60, .28); }\n' +
+  '.blk span.find-hit.on { background: var(--acc); color: var(--accfg); }\n';
+
 const SPLIT_CSS =
   '.blk.split-cont { padding-top: 0; text-indent: 0; }\n' +
   '.blk.split-cont::before { content: none; }\n' +
@@ -310,6 +319,7 @@ export function injectStyleSheet(): void {
     LIST_CSS +
     TABLE_CSS +
     IMAGE_CSS +
+    FIND_CSS +
     SPLIT_CSS;
   document.head.appendChild(el);
 }

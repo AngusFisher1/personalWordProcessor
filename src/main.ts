@@ -29,6 +29,7 @@ import {
   toggleInline,
 } from './commands';
 import { caretAtStart } from './caret';
+import { closeFind, isFindOpen, openFind, refreshFind, selectedText } from './findbar';
 import { bindPaste } from './paste';
 import {
   canRedo,
@@ -111,6 +112,10 @@ function inlineGroup(...kids: HTMLElement[]): HTMLElement {
  */
 function buildToolbar(host: HTMLElement): void {
   host.textContent = '';
+
+  host.appendChild(
+    textButton('Find', `Find and replace (${MOD}F)`, () => showFind(), '', MOD + 'F')
+  );
 
   const file = menuButton('File', 'Documents, open, save and export', () => [
     { label: 'New document', hint: MOD + 'N', onSelect: () => newDocument() },
@@ -333,6 +338,27 @@ function mountTitle(): void {
   ui.title = input;
 }
 
+function showFind(): void {
+  openFind(
+    {
+      onReplaced: (n) => {
+        if (n === 0) return;
+        // One reflow for the whole replace, not one per hit.
+        normalize();
+        paginate();
+        snapshot('structural');
+        updateToolbar();
+        scheduleSave();
+      },
+      onClose: () => {
+        docEl().focus();
+        updateToolbar();
+      },
+    },
+    selectedText()
+  );
+}
+
 function setPalette(id: string): void {
   const p = applyPalette(id);
   ui.palette?.setLabel(p.label);
@@ -401,6 +427,13 @@ function refreshChrome(): void {
     saveState === 'failed'
   );
   scheduleOutline();
+}
+
+let findTimer = 0;
+/** The document moved, so the hit list is stale. */
+function scheduleFindRefresh(): void {
+  clearTimeout(findTimer);
+  findTimer = window.setTimeout(() => refreshFind(), 300);
 }
 
 let outlineTimer = 0;
@@ -580,6 +613,7 @@ async function pickJson(): Promise<void> {
  * ------------------------------------------------------------------ */
 
 function openDoc(d: Doc): void {
+  if (isFindOpen()) closeFind();
   doc = d;
   setPageSetup(d.page);
   if (ui.title) ui.title.value = d.title;
@@ -687,6 +721,7 @@ function boot(): void {
     noteTyping();
     updateToolbar();
     scheduleSave();
+    if (isFindOpen()) scheduleFindRefresh();
   });
 
   document.addEventListener('selectionchange', () => {
@@ -703,6 +738,11 @@ function boot(): void {
   window.addEventListener('resize', () => refreshChrome());
 
   window.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && isFindOpen()) {
+      e.preventDefault();
+      closeFind();
+      return;
+    }
     if (!(e.metaKey || e.ctrlKey)) return;
     const k = e.key.toLowerCase();
     if (k === 'n') {
@@ -711,6 +751,9 @@ function boot(): void {
     } else if (k === 'o') {
       e.preventDefault();
       setRailTab('files');
+    } else if (k === 'f') {
+      e.preventDefault();
+      showFind();
     }
   });
 

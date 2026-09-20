@@ -396,6 +396,14 @@ export function updateGutter(currentPage: number): void {
  * Spine: the document map
  * ------------------------------------------------------------------ */
 
+/** Fractions down the document at which to tick the map, for find matches. */
+let spineMarks: number[] = [];
+
+export function setSpineMarks(marks: number[]): void {
+  spineMarks = marks;
+  updateSpine(currentPageIndex());
+}
+
 export function updateSpine(currentPage: number): void {
   let s = ui.spine;
   if (!s || !s.isConnected) {
@@ -426,6 +434,17 @@ export function updateSpine(currentPage: number): void {
     });
     s!.appendChild(bar);
   });
+
+  // Find matches, ticked against the map.
+  if (spineMarks.length > 0) {
+    const trackTop = 12;
+    const trackH = list.length * barH + (list.length - 1) * gap;
+    for (const f of spineMarks) {
+      const tick = el('div', 'spine-mark');
+      tick.style.top = trackTop + f * trackH + 'px';
+      s.appendChild(tick);
+    }
+  }
 
   // The slice of the document actually on screen.
   const total = doc.scrollHeight;

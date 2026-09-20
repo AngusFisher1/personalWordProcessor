@@ -78,7 +78,6 @@ const ui = {
   underline: null as HTMLButtonElement | null,
   undo: null as HTMLButtonElement | null,
   redo: null as HTMLButtonElement | null,
-  save: null as HTMLSpanElement | null,
   counts: null as HTMLSpanElement | null,
 };
 
@@ -99,11 +98,6 @@ function inlineGroup(...kids: HTMLElement[]): HTMLElement {
  */
 function buildToolbar(host: HTMLElement): void {
   host.textContent = '';
-
-  const saveState = document.createElement('div');
-  saveState.className = 'tb-save';
-  ui.save = saveState;
-  host.appendChild(saveState);
 
   const file = menuButton('File', 'Open, save and export', () => [
     { label: 'Open Word document…', onSelect: () => void pickDocx() },
@@ -275,16 +269,6 @@ function updateToolbar(): void {
         : 'Custom margins'
   );
 
-  if (ui.save) {
-    ui.save.classList.toggle('err', saveState === 'failed');
-    ui.save.textContent =
-      saveState === 'failed'
-        ? 'NOT SAVED — STORAGE FULL'
-        : saveState === 'pending'
-          ? 'SAVING…'
-          : 'SAVED';
-  }
-
   updateCounts();
   refreshChrome();
 }
@@ -302,10 +286,11 @@ function refreshChrome(): void {
     doc,
     lastWords < 0 ? 0 : lastWords,
     saveState === 'failed'
-      ? 'NOT SAVED'
+      ? 'NOT SAVED — STORAGE FULL'
       : saveState === 'pending'
         ? 'SAVING'
-        : 'SAVED'
+        : 'SAVED',
+    saveState === 'failed'
   );
   scheduleOutline();
 }

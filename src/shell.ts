@@ -69,9 +69,15 @@ export function buildRail(rail: HTMLElement, h: RailHooks): void {
   docInfo.append(ui.title, ui.meta);
   rail.appendChild(docInfo);
 
+  // What you act with comes first, then what the document is, then how the
+  // page is set up. The outline sits in the middle because it is the only
+  // part that grows.
+  const actions = el('div', 'rail-actions');
+  actions.id = 'rail-actions';
+  rail.appendChild(actions);
+
   const tabs = el('div', 'rail-tabs');
-  const outlineTab = el('div', 'rail-tab on', 'OUTLINE');
-  tabs.append(outlineTab);
+  tabs.append(el('div', 'rail-tab on', 'OUTLINE'));
   rail.appendChild(tabs);
 
   ui.outline = el('div', 'rail-outline');
@@ -79,10 +85,6 @@ export function buildRail(rail: HTMLElement, h: RailHooks): void {
 
   ui.setup = el('div', 'rail-setup');
   rail.appendChild(ui.setup);
-
-  const actions = el('div', 'rail-actions');
-  actions.id = 'rail-actions';
-  rail.appendChild(actions);
 }
 
 /** A row of key/value metadata, as used by PAGE SETUP. */
@@ -92,10 +94,18 @@ function setupRow(label: string, value: string): HTMLElement {
   return row;
 }
 
-export function updateRail(doc: Doc, words: number, saved: string): void {
+export function updateRail(
+  doc: Doc,
+  words: number,
+  saved: string,
+  failed = false
+): void {
   if (ui.title) ui.title.textContent = doc.title || 'Untitled';
   const n = pageCount();
   if (ui.meta) {
+    // The meta line already reports the save state, so there is no separate
+    // label for it; failure turns this line itself into the warning.
+    ui.meta.classList.toggle('err', failed);
     ui.meta.textContent =
       `${n} PP · ${words} W · ${saved}`.toUpperCase();
   }

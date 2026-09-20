@@ -1,9 +1,10 @@
-# Recto — a paged word processor
+# Recto
 
-A browser-based word processor that renders documents as fixed-size US Letter
-pages, the way Word and Google Docs do. Text flows from page to page as you
-type, and printing produces a PDF that matches the screen one to one. Built for
-resume editing.
+**A browser-based word processor that renders documents as real 8.5 × 11 pages.**
+Text flows from page to page as you type, and printing produces a PDF that matches
+the screen one to one. Local-first, keyboard-driven, no cloud, no account, no ribbon.
+
+![Recto — the editing view](docs/screenshots/01-editing.png)
 
 The browser has no native concept of a page. Pagination is implemented here by
 measuring content and moving DOM nodes between fixed-height page containers.
@@ -15,6 +16,15 @@ npm run dev
 
 `npm run build` type-checks and bundles to `dist/`.
 
+## Contents
+
+- [Stack](#stack)
+- [The workspace](#the-workspace) — [command palette](#the-command-palette), [formatting bar](#the-formatting-bar), [export sheet](#the-export-sheet), [library](#the-library), [palettes](#palettes)
+- [Geometry](#geometry) · [How it works](#how-it-works) · [Pagination](#the-two-pagination-paths) · [Line-level splitting](#line-level-splitting) · [Styles](#styles)
+- [Opening a .docx](#opening-a-docx) — [headings](#headings-when-the-document-does-not-say), [tables](#tables), [sections](#sections), [the preservation vault](#the-preservation-vault)
+- [Fidelity harness](#fidelity-harness) · [Printing to PDF](#printing-to-pdf) · [.docx export](#docx-export) · [Storage](#storage)
+- [Format independence](#format-independence) · [Not built, on purpose](#not-built-on-purpose) · [Acceptance tests](#acceptance-tests)
+
 ## Stack
 
 Vanilla TypeScript, Vite, and exactly one runtime dependency (`docx`, loaded
@@ -25,6 +35,10 @@ writing the pagination layer is the point of the project.
 ## The workspace
 
 The workspace is a darkroom. The only light in it is the page.
+
+![Find and replace](docs/screenshots/05-find-replace.png)
+<sub>Find and replace — the current match is solid accent, the rest tinted, and every match is ticked on the document map at the right edge.</sub>
+
 
 **Persistent chrome never crosses the paper edge.** Everything floats in the
 gutter or sits in the rail, so the page is the only thing in the room that
@@ -50,6 +64,10 @@ nothing to apply itself to.
 
 ### The command palette
 
+![Command palette](docs/screenshots/03-command-palette.png)
+<sub>The command palette over a dimmed workspace. Matching is a scored subsequence, so `exh` finds Export HTML.</sub>
+
+
 `Cmd/Ctrl+K`. Every command in the program, reachable by typing part of its
 name: six styles, twelve palettes, two margin presets, five export formats
 and a dozen actions. The rail is where you go to find out what exists; this
@@ -70,6 +88,10 @@ and the current palette are the current ones.
 
 ### The formatting bar
 
+![Formatting bar](docs/screenshots/02-selection.png)
+<sub>A selection brings up inline formatting and nothing else. It is gone before the next character lands.</sub>
+
+
 Selecting a phrase and reaching 250px left to bold it is the most repeated
 gesture in the program. A small bar appears over the selection with the
 paragraph style, bold, italic and underline, positioned over the **first**
@@ -84,6 +106,10 @@ hidden, and a bar that never appears in an embedded view is worse than one
 that measures a millisecond late.
 
 ### The export sheet
+
+![Export sheet](docs/screenshots/07-export.png)
+<sub>Every format costs something different, and the sheet says so at the moment of choosing.</sub>
+
 
 `Cmd/Ctrl+E`. A menu of file formats tells you what you can produce; it does
 not tell you what each one costs, and here every format costs something
@@ -103,6 +129,10 @@ write back into. Promising a byte-identical round trip for a document that
 has no original would be a lie told at exactly the wrong moment.
 
 ### The library
+
+![Document library](docs/screenshots/04-library.png)
+<sub>Type-to-filter, a recency fade down the list, and a real page preview rather than an icon.</sub>
+
 
 The rail's FILES tab lists every document, newest first, with a type-to-filter
 box and a recency fade down the list. Clicking one opens it; the row menu
@@ -141,6 +171,10 @@ page itself stays white in all of them, because it is paper.
 | Noir — white on pure black | |
 
 The choice is remembered in `localStorage`.
+
+![Light palette](docs/screenshots/09-light.png)
+<sub>Moss on stone — one of the five light palettes. The page stays #FFFFFF in all twelve, because it is paper.</sub>
+
 
 ### One deliberate departure from the specification
 
@@ -422,6 +456,10 @@ repair the file. Cell selection spanning multiple cells is out of scope.
 
 ### Sections
 
+![Header and footer editing](docs/screenshots/06-header-footer.png)
+<sub>Header and footer editing: the body drops to 16%, the margin rules show, and the controls stay in the gutter.</sub>
+
+
 A Word document is a sequence of sections, each with its own page size,
 margins and headers. Reading only the last `w:sectPr` - which is what a
 single page setup amounts to - lays the whole document out with the geometry
@@ -574,6 +612,10 @@ Notes:
 - The document font is Calibri, matching the on-screen stack.
 
 ## Storage
+
+![Empty state](docs/screenshots/08-empty.png)
+<sub>A new document: one page, one caret, four keys.</sub>
+
 
 Autosaves to `localStorage` on a 1s debounce under `wp:doc:<id>`, with an index
 at `wp:docs`. Everything on a document that is not its blocks - headers,

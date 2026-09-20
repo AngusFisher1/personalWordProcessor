@@ -58,6 +58,7 @@ export interface RailHooks {
   onNewDoc(): void;
   onDuplicateDoc(id: string): void;
   onDeleteDoc(id: string): void;
+  onExportLibrary(): void;
 }
 
 export type RailTab = 'outline' | 'files';
@@ -253,6 +254,17 @@ function renderFiles(): void {
       )
     );
     foot.appendChild(el('div', 'files-foot-line', 'NO ACCOUNT · NO SYNC'));
+
+    // The one command that gets everything out. It sits under the storage
+    // figure on purpose: that line is where you find yourself when you start
+    // wondering what happens to all this if the browser forgets it.
+    const out = document.createElement('button');
+    out.className = 'files-foot-btn';
+    out.textContent = 'EXPORT EVERYTHING';
+    out.title = 'Write every document to Markdown, JSON and HTML in one archive';
+    out.addEventListener('mousedown', (ev) => ev.preventDefault());
+    out.addEventListener('click', () => hooks?.onExportLibrary());
+    foot.appendChild(out);
   }
 }
 
@@ -263,20 +275,44 @@ function setupRow(label: string, value: string): HTMLElement {
   return row;
 }
 
+/**
+ * A passing message in the meta line.
+ *
+ * Commands that produce a file - a bulk export, an import - finish silently
+ * otherwise, and a download that may or may not have happened is worse than
+ * no feedback at all. The last arguments are kept so the line can be put
+ * back exactly as it was once the message expires.
+ */
+let flash: { text: string; err: boolean } | null = null;
+let flashTimer = 0;
+let lastRail: [Doc, number, string, boolean] | null = null;
+
+export function flashRail(text: string, err = false, ms = 5000): void {
+  flash = { text, err };
+  window.clearTimeout(flashTimer);
+  flashTimer = window.setTimeout(() => {
+    flash = null;
+    if (lastRail) updateRail(...lastRail);
+  }, ms);
+  if (lastRail) updateRail(...lastRail);
+}
+
 export function updateRail(
   doc: Doc,
   words: number,
   saved: string,
   failed = false
 ): void {
+  lastRail = [doc, words, saved, failed];
   if (ui.title) ui.title.textContent = doc.title || 'Untitled';
   const n = pageCount();
   if (ui.meta) {
     // The meta line already reports the save state, so there is no separate
     // label for it; failure turns this line itself into the warning.
-    ui.meta.classList.toggle('err', failed);
-    ui.meta.textContent =
-      `${n} PP · ${words} W · ${saved}`.toUpperCase();
+    ui.meta.classList.toggle('err', failed || !!flash?.err);
+    ui.meta.textContent = (
+      flash ? flash.text : `${n} PP · ${words} W · ${saved}`
+    ).toUpperCase();
   }
 
   const setup = currentPageSetup();

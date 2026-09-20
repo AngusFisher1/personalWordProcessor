@@ -5,3 +5,5 @@ export { importDocx } from '../src/docx-import';
 export { exportDocx } from '../src/export-docx';
 export { unzip, partText } from '../src/docx-package';
 export type { Vault } from '../src/docx-package';
+export { toMarkdown, toHtml } from '../src/export-text';
+export { fromMarkdown } from '../src/import-md';

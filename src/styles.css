@@ -64,7 +64,12 @@ html, body {
   background: var(--rail);
   border-right: 1px solid var(--line);
   user-select: none;
-  overflow: hidden;
+  /* Scrolls rather than clips. The rail is a stack of fixed-height sections
+     around one flexible list, so on a short window the sections below the
+     list would otherwise be drawn on top of each other. */
+  overflow: hidden auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
 }
 
 .rail-head {
@@ -184,7 +189,10 @@ html, body {
 
 .files-list {
   flex: 1;
-  min-height: 0;
+  /* Enough for three rows. On a short window the sections below this one
+     would otherwise squeeze the library down to a single visible entry,
+     which reads as a library with one document in it. */
+  min-height: 120px;
   overflow-y: auto;
   padding-bottom: 8px;
 }
@@ -255,6 +263,28 @@ html, body {
   font-size: 9px;
   letter-spacing: 0.1em;
   color: var(--dim);
+}
+
+/* The way out. Reads as a button before it is hovered, like the rail's
+   other controls, because a thing you reach for once a year has to be
+   findable the first time. */
+.files-foot-btn {
+  display: block;
+  width: 100%;
+  margin-top: 11px;
+  padding: 7px 0;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--panel);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.14em;
+  color: var(--mid);
+  cursor: pointer;
+}
+.files-foot-btn:hover {
+  border-color: var(--acc);
+  color: var(--hi);
 }
 
 .rail-setup {

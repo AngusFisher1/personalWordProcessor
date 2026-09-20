@@ -59,6 +59,7 @@ import {
   download,
   duplicateDoc,
   exportJson,
+  safeFileName,
   importJson,
   load,
   loadById,
@@ -71,6 +72,9 @@ import type { Vault } from './docx-package';
 import { deleteOriginal, loadOriginal, saveOriginal } from './docx-package';
 import { importDocx } from './docx-import';
 import { closeMenu, iconButton, menuButton, textButton } from './ui';
+import { toHtml, toMarkdown } from './export-text';
+import { fromMarkdown } from './import-md';
+import { exportLibrary, libraryFileName } from './export-library';
 import { PALETTES, applyPalette, currentPaletteId } from './theme';
 import {
   activeHeadingId,
@@ -82,6 +86,7 @@ import {
   updateOutline,
   setLibrary,
   setRailTab,
+  flashRail,
   updateRail,
   updateReadout,
   updateSpine,
@@ -151,16 +156,26 @@ function buildToolbar(host: HTMLElement): void {
     { separator: true },
     { heading: 'Plain formats' },
     {
-      label: 'Export JSON',
-      onSelect: () => {
-        syncModel();
-        download(
-          safeName(doc.title) + '.json',
-          new Blob([exportJson(doc)], { type: 'application/json' })
-        );
-      },
+      label: 'Export Markdown',
+      onSelect: () => saveText('.md', 'text/markdown', () => toMarkdown(doc)),
     },
-    { label: 'Import JSON…', onSelect: () => void pickJson() },
+    {
+      label: 'Export HTML',
+      onSelect: () => saveText('.html', 'text/html', () => toHtml(doc)),
+    },
+    {
+      label: 'Export JSON',
+      onSelect: () => saveText('.json', 'application/json', () => exportJson(doc)),
+    },
+    { separator: true },
+    { label: 'Import Markdown…', onSelect: () => void pickText('md') },
+    { label: 'Import JSON…', onSelect: () => void pickText('json') },
+    { separator: true },
+    {
+      label: 'Export whole library…',
+      hint: 'ZIP',
+      onSelect: () => void exportWholeLibrary(),
+    },
   ]);
   host.appendChild(file.el);
 
@@ -597,10 +612,6 @@ function afterChange(): void {
  * Export
  * ------------------------------------------------------------------ */
 
-function safeName(s: string): string {
-  return (s || 'document').replace(/[^a-z0-9\-_ ]/gi, '').trim() || 'document';
-}
-
 async function printDocument(): Promise<void> {
   // The print dialog can open before a pending debounced reflow runs, which
   // produces a PDF that differs from the screen.
@@ -614,7 +625,7 @@ async function exportWord(): Promise<void> {
   syncModel();
   const { exportDocx } = await import('./export-docx');
   const blob = await exportDocx(doc, vault);
-  download(safeName(doc.title) + '.docx', blob);
+  download(safeFileName(doc.title) + '.docx', blob);
   if (vault) showWarnings(vault);
 }
 
@@ -679,22 +690,47 @@ function showWarnings(v: Vault): void {
   host.appendChild(close);
 }
 
-async function pickJson(): Promise<void> {
+/**
+ * Write the current document out as text.
+ *
+ * The model is synced first: an export that quietly omits the sentence
+ * being typed is worse than no export, and the save debounce means the
+ * model is up to half a second behind the screen at any moment.
+ */
+function saveText(ext: string, mime: string, make: () => string): void {
+  syncModel();
+  download(safeFileName(doc.title) + ext, new Blob([make()], { type: mime + ';charset=utf-8' }));
+  flashRail('EXPORTED ' + ext.slice(1));
+}
+
+/**
+ * Read a Markdown or JSON file in as a new document.
+ *
+ * Neither carries a vault, so `vault` is cleared: a document that came from
+ * text has no original package to preserve, and keeping the previous one
+ * would write the new document's words into the old document's XML.
+ */
+async function pickText(kind: 'md' | 'json'): Promise<void> {
   const input = document.createElement('input');
   input.type = 'file';
-  input.accept = 'application/json,.json';
+  input.accept = kind === 'json' ? 'application/json,.json' : '.md,.markdown,text/markdown';
   input.addEventListener('change', () => {
     const file = input.files?.[0];
     if (!file) return;
     const reader = new FileReader();
     reader.onload = () => {
+      const text = String(reader.result);
       try {
-        doc = importJson(String(reader.result));
+        doc =
+          kind === 'json'
+            ? importJson(text)
+            : fromMarkdown(text, { title: file.name.replace(/[.](md|markdown)$/i, '') });
         vault = null;
         openDoc(doc);
         snapshot('structural');
         save(doc, docMeta());
         refreshLibrary();
+        flashRail('IMPORTED ' + doc.blocks.length + ' BLOCKS');
       } catch (err) {
         alert('Could not import that file: ' + (err as Error).message);
       }
@@ -702,6 +738,28 @@ async function pickJson(): Promise<void> {
     reader.readAsText(file);
   });
   input.click();
+}
+
+/**
+ * The acceptance test for owning these documents: one command that writes
+ * every one of them out in formats this program did not invent.
+ */
+async function exportWholeLibrary(): Promise<void> {
+  syncModel();
+  save(doc, docMeta()); // so the open document is exported as it stands
+  flashRail('EXPORTING LIBRARY…');
+  try {
+    const { blob, documents, missing } = await exportLibrary();
+    download(libraryFileName(), blob);
+    flashRail(
+      documents + ' DOCUMENT' + (documents === 1 ? '' : 'S') + ' EXPORTED' +
+        (missing.length ? ' · ' + missing.length + ' MISSING' : ''),
+      missing.length > 0
+    );
+  } catch (err) {
+    flashRail('EXPORT FAILED', true);
+    alert('Could not export the library: ' + (err as Error).message);
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -788,6 +846,7 @@ function boot(): void {
     onNewDoc: () => newDocument(),
     onDuplicateDoc: (id) => duplicate(id),
     onDeleteDoc: (id) => remove(id),
+    onExportLibrary: () => void exportWholeLibrary(),
   });
   mountTitle();
   const bar = document.getElementById('rail-actions');
@@ -933,5 +992,14 @@ Object.assign(window as unknown as Record<string, unknown>, {
     page: currentPageSetup,
     vault: () => vault,
     openDocx: openDocxFile,
+    markdown: () => {
+      syncModel();
+      return toMarkdown(doc);
+    },
+    html: () => {
+      syncModel();
+      return toHtml(doc);
+    },
+    exportLibrary,
   },
 });

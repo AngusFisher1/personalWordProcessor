@@ -96,7 +96,7 @@ uses, and converts once on the way to CSS. Eleven-point body text is eleven
 points on paper and 14.67px on screen. Previously it was 11px, which was
 8.25pt - a third too small in every exported document.
 
-## Geometry## Geometry
+## Geometry
 
 All geometry is in CSS pixels at 96px per inch, and the numbers are exact.
 
@@ -123,7 +123,10 @@ All geometry is in CSS pixels at 96px per inch, and the numbers are exact.
 | `caret.ts` | serialize and restore the caret across node moves |
 | `commands.ts` | toolbar actions, Enter/Backspace/Delete, shortcuts |
 | `paste.ts` | clipboard sanitizer and block mapping |
-| `persist.ts` | localStorage, JSON import/export |
+| `persist.ts` | localStorage, JSON import/export, filename sanitizing |
+| `export-text.ts` | Markdown and HTML out |
+| `import-md.ts` | Markdown in |
+| `export-library.ts` | the whole library, in one archive |
 | `history.ts` | undo/redo stack |
 | `export-docx.ts` | .docx generation, and the choice between the two paths |
 | `docx-import.ts` | OOXML to model: paragraphs, tables, styles, numbering, sections |
@@ -345,8 +348,14 @@ the vault, and an edited one is rebuilt keeping its `w:tblPr`, `w:tblGrid` and
 every `w:trPr` and `w:tcPr`, so borders, widths, shading and merges survive an
 edit to the words.
 
-Still to come: Tab between cells, column resize, and inserting or deleting
-rows and columns. Cell selection spanning multiple cells is out of scope.
+Tab and Shift+Tab move between cells, growing a row off the end of the last
+one. Arrow keys cross cell edges, measured against the cell's content rather
+than its box, because the caret sits inside the cell padding and a tighter
+test makes the second press do nothing. Dragging a border resizes a column
+and holds the table's total width. The context menu inserts and deletes rows
+and columns, with the column operations disabled on a table containing merged
+cells - a grid that no longer describes the rows is what makes Word offer to
+repair the file. Cell selection spanning multiple cells is out of scope.
 
 ### The preservation vault
 
@@ -464,17 +473,60 @@ Autosaves to `localStorage` on a 1s debounce under `wp:doc:<id>`, with an index
 at `wp:docs`. If storage is full the save fails visibly in the toolbar rather
 than silently — export JSON at that point to keep your work. JSON export writes
 the `Doc` verbatim; import validates that `blocks` is an array and every
-`styleId` is known before replacing the document.
+`styleId` is known before replacing the document. Markdown, HTML and the
+bulk library export are described under **Format independence** above.
+
+## Format independence
+
+The .docx path deepens an investment in a format Microsoft owns. That is the
+right trade, because .docx is what the world sends and receives. The hedge is
+that nothing here depends on it, or on this program:
+
+| Out | |
+|---|---|
+| Markdown | headings by rank, bullets with their nesting and numbering, GFM tables, bold/italic/links |
+| HTML | one self-contained file, the named styles inlined as a stylesheet, page box and `@page` from the document's own setup |
+| JSON | the `Doc` verbatim - the only lossless copy, and the only one this program reads back |
+
+| In | |
+|---|---|
+| Markdown | ATX and setext headings, lists, pipe tables, emphasis, links, code spans, quotes |
+| JSON | validated against the model before it replaces the document |
+
+**Export whole library…**, in the File menu and at the foot of the FILES tab,
+writes every document in one command: a zip of `markdown/`, `json/` and
+`html/`, a `manifest.json`, and a `README.md` listing what is in it. It reads
+from storage rather than from each document's vault, because a vault lives in
+IndexedDB and may be gone, and the point of this command is to work on the
+worst day rather than the best one.
+
+Two things it deliberately does not do:
+
+- **Images are not in the archive.** They live in each document's original
+  .docx, which is where they stay lossless; a Markdown file gets a note saying
+  a picture was there rather than a link to a file the reader does not have.
+  Export a document as Word to get its pictures.
+- **Markdown import is a conversion, not a round trip.** A Markdown file has no
+  vault, so importing one and exporting .docx produces a new package rather
+  than a preserved original. The importer says so by clearing the vault, which
+  is what stops a new document's words being written into an old document's XML.
+
+ODT is not implemented. The spec allowed for it *"only if the export layer
+turns out to abstract cleanly"* — it does not. Our export layer is the vault:
+it is OOXML-specific by design, down to preserving `w:pPr` per paragraph. ODT
+would be a second implementation from scratch, for a format that solves no
+problem Markdown and .docx do not already solve here.
 
 ## Not built, on purpose
 
 - **Splitting a single line.** A block whose one line is taller than a whole
   page is placed and clipped.
-
-- Tables, images, columns, text boxes. Tables are **dropped** on paste, text
-  and all — worth knowing if you paste a resume that uses a table for layout.
-- .docx or PDF import; headers, footers, page numbers; collaboration; spell
-  check beyond the browser's own; mobile layout; any backend.
+- **Tables on paste are dropped**, text and all - worth knowing if you paste a
+  resume that uses a table for layout. A table that arrives in a .docx is read
+  and edited; one that arrives on the clipboard is not.
+- Columns, text boxes, footnotes, PDF import, section breaks with differing
+  orientation, collaboration, spell check beyond the browser's own, mobile
+  layout, any backend.
 
 Undo granularity is coarser than Word's: typing coalesces into one entry per
 500ms of activity, and each structural change is one entry.

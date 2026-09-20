@@ -240,6 +240,26 @@ function coercePage(o: Record<string, unknown>): PageSetup {
   return pageSetup('narrow');
 }
 
+/**
+ * A filename that will survive every filesystem we might land on.
+ *
+ * Kept deliberately permissive: an accented or non-Latin title should come
+ * out as itself, not as a row of dropped letters, so only the characters
+ * Windows actually refuses are replaced.
+ */
+export function safeFileName(title: string, fallback = 'document'): string {
+  const cleaned = title
+    .replace(/[\/:*?"<>|]/g, '-')
+    .replace(/[\x00-\x1f]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^\.+/, '')
+    .replace(/[. ]+$/, '')
+    .slice(0, 80)
+    .trim();
+  return cleaned === '' ? fallback : cleaned;
+}
+
 export function download(filename: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');

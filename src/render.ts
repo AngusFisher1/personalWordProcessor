@@ -1,5 +1,12 @@
-import type { Block, Doc, StyleId } from './model';
-import { newId } from './model';
+import type {
+  Block,
+  Doc,
+  ParagraphBlock,
+  StyleId,
+  TableBlock,
+  TableCell,
+} from './model';
+import { isTable, newId } from './model';
 import { styleClass, styleOf } from './styles';
 
 /* ------------------------------------------------------------------ *
@@ -37,7 +44,7 @@ export function pageContent(page: Element): HTMLElement {
   return c;
 }
 
-export function makeBlockEl(b: Block): HTMLElement {
+export function makeBlockEl(b: ParagraphBlock): HTMLElement {
   const el = document.createElement('div');
   el.className = 'blk ' + styleClass(b.styleId);
   el.dataset.blockId = b.id;
@@ -60,11 +67,89 @@ export function applyStyle(el: HTMLElement, styleId: StyleId): void {
   el.className = ['blk', styleClass(styleId), ...keep].join(' ');
 }
 
+/* ------------------------------------------------------------------ *
+ * Tables
+ *
+ * A cell holds ordinary .blk paragraphs, so styles, the caret and the inline
+ * sanitizer all work inside one without knowing tables exist. What the table
+ * element adds is the grid around them.
+ * ------------------------------------------------------------------ */
+
+export function makeTableEl(t: TableBlock): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.className = 'blk-table';
+  wrap.dataset.blockId = t.id;
+
+  const table = document.createElement('table');
+  // Lay the table out at the width the document says, rather than letting the
+  // browser's automatic layout disagree with what Word measured.
+  const total = t.cols.reduce((a, c) => a + c.width, 0);
+  table.style.width = total > 0 ? total + 'px' : '100%';
+
+  const colgroup = document.createElement('colgroup');
+  for (const c of t.cols) {
+    const col = document.createElement('col');
+    if (c.width > 0) col.style.width = c.width + 'px';
+    colgroup.appendChild(col);
+  }
+  table.appendChild(colgroup);
+
+  const tbody = document.createElement('tbody');
+  for (const row of t.rows) {
+    tbody.appendChild(makeRowEl(row));
+  }
+  table.appendChild(tbody);
+  wrap.appendChild(table);
+  return wrap;
+}
+
+export function makeRowEl(row: TableBlock['rows'][number]): HTMLElement {
+  const tr = document.createElement('tr');
+  tr.dataset.rowId = row.id;
+  if (row.headerRow) tr.classList.add('hdr');
+  for (let i = 0; i < row.cells.length; i++) {
+    const cell = row.cells[i];
+    // An empty cell is one that a gridSpan absorbed into the cell before it.
+    if (cell.length === 0) continue;
+    let span = 1;
+    while (i + span < row.cells.length && row.cells[i + span].length === 0) span++;
+
+    const td = document.createElement('td');
+    if (span > 1) td.colSpan = span;
+    for (const p of cell) td.appendChild(makeBlockEl(p));
+    tr.appendChild(td);
+  }
+  return tr;
+}
+
+export function isTableEl(el: Element): boolean {
+  return el.classList.contains('blk-table');
+}
+
+/** The paragraph or table elements laid out directly on a page. */
+export function flowChildren(content: HTMLElement): HTMLElement[] {
+  return (Array.from(content.children) as HTMLElement[]).filter(
+    (c) => c.classList.contains('blk') || c.classList.contains('blk-table')
+  );
+}
+
 export function pages(root: HTMLElement = docEl()): HTMLElement[] {
   return Array.from(root.querySelectorAll(':scope > .page')) as HTMLElement[];
 }
 
+/**
+ * Top-level paragraph elements. Paragraphs inside table cells are deliberately
+ * excluded: they are part of a table block, not items in the page flow, and
+ * pagination and readModel would double-count them.
+ */
 export function blocksIn(root: HTMLElement): HTMLElement[] {
+  return (Array.from(root.querySelectorAll('.blk')) as HTMLElement[]).filter(
+    (el) => !el.closest('.blk-table')
+  );
+}
+
+/** Every paragraph element, including the ones inside table cells. */
+export function allParagraphEls(root: HTMLElement): HTMLElement[] {
   return Array.from(root.querySelectorAll('.blk')) as HTMLElement[];
 }
 
@@ -125,7 +210,9 @@ export function clearSplitMarks(el: HTMLElement): void {
  */
 export function logicalGroups(root: HTMLElement = docEl()): Group[] {
   const out: Group[] = [];
-  for (const el of blocksIn(root)) {
+  const flow: HTMLElement[] = [];
+  for (const page of pages(root)) flow.push(...flowChildren(pageContent(page)));
+  for (const el of flow) {
     const from = el.dataset.continuesFrom;
     const last = out[out.length - 1];
     if (from && last && last.head.dataset.blockId === from) {
@@ -189,7 +276,9 @@ export function renderBlocks(blocks: Block[], root: HTMLElement): void {
   const page = newPage();
   root.appendChild(page);
   const c = pageContent(page);
-  for (const b of blocks) c.appendChild(makeBlockEl(b));
+  for (const b of blocks) {
+    c.appendChild(isTable(b) ? makeTableEl(b) : makeBlockEl(b));
+  }
 }
 
 /**
@@ -199,22 +288,69 @@ export function renderBlocks(blocks: Block[], root: HTMLElement): void {
 export function readModel(root: HTMLElement): Block[] {
   // Continuation pieces are merged back here, so the stored document always
   // has exactly one block per logical paragraph.
-  return logicalGroups(root).map((g) => {
-    let id = g.head.dataset.blockId;
-    if (!id) {
-      id = newId();
-      g.head.dataset.blockId = id;
+  return logicalGroups(root).map((g) =>
+    isTableEl(g.head) ? readTableEl(g) : readParagraphGroup(g)
+  );
+}
+
+function readParagraphGroup(g: Group): ParagraphBlock {
+  let id = g.head.dataset.blockId;
+  if (!id) {
+    id = newId();
+    g.head.dataset.blockId = id;
+  }
+  const marker = g.head.dataset.marker;
+  const level = Number(g.head.dataset.level);
+  return {
+    id,
+    styleId: styleOf(g.head),
+    html: mergedHtml(g),
+    ...(marker !== undefined ? { listMarker: marker } : {}),
+    ...(Number.isFinite(level) && level > 0 ? { listLevel: level } : {}),
+  };
+}
+
+function readParagraphEl(el: HTMLElement): ParagraphBlock {
+  return readParagraphGroup({ head: el, tails: [] });
+}
+
+/**
+ * Read a table back, folding any continuation pieces of it into one. Rows are
+ * keyed by id so a header repeated on a later page is not read twice.
+ */
+function readTableEl(g: Group): TableBlock {
+  const id = g.head.dataset.blockId ?? newId();
+  const cols = Array.from(
+    g.head.querySelectorAll('col')
+  ).map((c) => ({ width: parseFloat((c as HTMLElement).style.width) || 0 }));
+
+  const rows: TableBlock['rows'] = [];
+  const seen = new Set<string>();
+  for (const part of [g.head, ...g.tails]) {
+    for (const tr of Array.from(part.querySelectorAll('tr'))) {
+      const rowId = (tr as HTMLElement).dataset.rowId ?? newId();
+      if (seen.has(rowId)) continue; // a repeated header
+      seen.add(rowId);
+      const cells: TableCell[] = [];
+      for (const td of Array.from(tr.children) as HTMLElement[]) {
+        cells.push(
+          (Array.from(td.querySelectorAll(':scope > .blk')) as HTMLElement[]).map(
+            readParagraphEl
+          )
+        );
+        // Put back the placeholder entries a colspan stands for, so the row
+        // keeps one entry per grid column.
+        const span = (td as HTMLTableCellElement).colSpan || 1;
+        for (let k = 1; k < span; k++) cells.push([]);
+      }
+      rows.push({
+        id: rowId,
+        headerRow: tr.classList.contains('hdr'),
+        cells,
+      });
     }
-    const marker = g.head.dataset.marker;
-    const level = Number(g.head.dataset.level);
-    return {
-      id,
-      styleId: styleOf(g.head),
-      html: mergedHtml(g),
-      ...(marker !== undefined ? { listMarker: marker } : {}),
-      ...(Number.isFinite(level) && level > 0 ? { listLevel: level } : {}),
-    };
-  });
+  }
+  return { kind: 'table', id, cols, rows };
 }
 
 function mergedHtml(g: Group): string {

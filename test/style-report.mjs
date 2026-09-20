@@ -63,9 +63,18 @@ async function walk(dir, depth = 0) {
       const buf = bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength);
       const { doc, vault } = await importDocx(buf, basename(full));
       docs++;
-      for (const b of doc.blocks) bump(styleTally, b.styleId);
-      // Which w:pStyle each block carried, read back out of the preserved XML.
+      // Tables count as one item and carry their cell paragraphs inside.
+      const flat = [];
       for (const b of doc.blocks) {
+        if (b.kind === 'table') {
+          bump(styleTally, '(table)');
+          for (const row of b.rows) for (const cell of row.cells) flat.push(...cell);
+        } else {
+          flat.push(b);
+        }
+      }
+      for (const b of flat) bump(styleTally, b.styleId);
+      for (const b of flat) {
         const xml = vault.blockXml.get(b.id) ?? '';
         const m = xml.match(/<w:pStyle w:val="([^"]*)"/);
         const p = m ? m[1] : '(none)';

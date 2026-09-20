@@ -1,10 +1,12 @@
-import type { Block, PageSetup } from './model';
+import type { ParagraphBlock, PageSetup } from './model';
 import { contentHeight, contentWidth, newId, pageSetup } from './model';
 import { getCaret, setCaret } from './caret';
 import type { Group } from './render';
 import {
   docEl,
+  flowChildren,
   isContinuation,
+  isTableEl,
   logicalGroups,
   makeBlockEl,
   measureEl,
@@ -105,6 +107,21 @@ function keyFor(el: HTMLElement): string {
  */
 function measureLines(el: HTMLElement): LineInfo {
   const box = el.getBoundingClientRect();
+  if (isTableEl(el)) {
+    // One indivisible unit: a table splits at row boundaries, not line ones,
+    // and that is handled separately.
+    const h = box.height || measureClone(el);
+    return {
+      height: h,
+      lineCount: 1,
+      lineH: h,
+      padTop: 0,
+      padBottom: 0,
+      inkTops: [],
+      textLen: 0,
+      starts: new Map(),
+    };
+  }
   const height = box.height || measureClone(el);
   const cs = getComputedStyle(el);
   const padTop = parseFloat(cs.paddingTop) + parseFloat(cs.borderTopWidth);
@@ -165,7 +182,7 @@ function measureClone(el: HTMLElement): number {
 }
 
 /** Measure model blocks without rendering them into the document. */
-export function measureHeights(blocks: Block[], contentW: number): number[] {
+export function measureHeights(blocks: ParagraphBlock[], contentW: number): number[] {
   const m = measureEl();
   m.style.width = contentW + 'px';
   m.textContent = '';
@@ -267,11 +284,11 @@ function wrapAsBody(nodes: Node[]): HTMLElement {
   return el;
 }
 
-function isBlk(n: Node): n is HTMLElement {
-  return (
-    n.nodeType === Node.ELEMENT_NODE &&
-    (n as HTMLElement).classList.contains('blk')
-  );
+/** A legitimate direct child of .page-content: a paragraph or a table. */
+function isFlow(n: Node): n is HTMLElement {
+  if (n.nodeType !== Node.ELEMENT_NODE) return false;
+  const el = n as HTMLElement;
+  return el.classList.contains('blk') || el.classList.contains('blk-table');
 }
 
 export function normalize(): void {
@@ -316,6 +333,8 @@ export function normalize(): void {
     // Hoist blocks the browser nested inside other blocks.
     for (const nested of Array.from(c.querySelectorAll('.blk'))) {
       if (nested.parentElement === c) continue;
+      // Paragraphs inside a table cell belong there.
+      if (nested.closest('.blk-table')) continue;
       let top: Element = nested;
       while (top.parentElement && top.parentElement !== c) {
         top = top.parentElement;
@@ -332,7 +351,7 @@ export function normalize(): void {
       run = [];
     };
     for (const n of Array.from(c.childNodes)) {
-      if (isBlk(n)) {
+      if (isFlow(n)) {
         flush(n);
         continue;
       }
@@ -358,7 +377,9 @@ export function normalize(): void {
     // Mint an id for any block a browser clone stripped one from.
     for (const b of Array.from(c.children) as HTMLElement[]) {
       if (!b.dataset.blockId) b.dataset.blockId = newId();
-      if (b.childNodes.length === 0) b.innerHTML = '<br>';
+      if (b.classList.contains('blk') && b.childNodes.length === 0) {
+        b.innerHTML = '<br>';
+      }
     }
   }
 }
@@ -437,9 +458,7 @@ function linesThatFit(info: LineInfo, from: number, remaining: number): number {
 }
 
 function topBlocks(page: Element): HTMLElement[] {
-  return Array.from(pageContent(page).children).filter((c) =>
-    c.classList.contains('blk')
-  ) as HTMLElement[];
+  return flowChildren(pageContent(page));
 }
 
 function firstBlock(page: Element): HTMLElement | null {

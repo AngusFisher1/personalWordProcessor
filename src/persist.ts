@@ -1,4 +1,11 @@
-import type { Block, Doc, MarginKey, PageSetup } from './model';
+import type {
+  Block,
+  Doc,
+  MarginKey,
+  PageSetup,
+  ParagraphBlock,
+  TableBlock,
+} from './model';
 import { MARGINS, isStyleId, newId, pageSetup } from './model';
 
 const INDEX_KEY = 'wp:docs';
@@ -70,6 +77,7 @@ function coerce(raw: unknown): Doc {
   const blocks: Block[] = o.blocks.map((b, i) => {
     if (!b || typeof b !== 'object') throw new Error(`Block ${i} is not an object`);
     const rb = b as Record<string, unknown>;
+    if (rb.kind === 'table') return coerceTable(rb, i);
     if (!isStyleId(rb.styleId)) {
       throw new Error(`Block ${i} has unknown styleId ${String(rb.styleId)}`);
     }
@@ -91,6 +99,52 @@ function coerce(raw: unknown): Doc {
     title: typeof o.title === 'string' && o.title ? o.title : 'Untitled',
     page: coercePage(o),
     blocks: blocks.length ? blocks : [{ id: newId(), styleId: 'Body', html: '' }],
+  };
+}
+
+function coerceParagraph(raw: unknown, where: string): ParagraphBlock {
+  const rb = (raw ?? {}) as Record<string, unknown>;
+  if (!isStyleId(rb.styleId)) {
+    throw new Error(`${where} has unknown styleId ${String(rb.styleId)}`);
+  }
+  return {
+    id: typeof rb.id === 'string' && rb.id ? rb.id : newId(),
+    styleId: rb.styleId,
+    html: typeof rb.html === 'string' ? rb.html : '',
+    ...(typeof rb.listMarker === 'string' ? { listMarker: rb.listMarker } : {}),
+    ...(typeof rb.listLevel === 'number' && rb.listLevel > 0
+      ? { listLevel: rb.listLevel }
+      : {}),
+  };
+}
+
+function coerceTable(rb: Record<string, unknown>, i: number): TableBlock {
+  if (!Array.isArray(rb.rows)) throw new Error(`Table ${i} has no rows`);
+  const cols = Array.isArray(rb.cols)
+    ? rb.cols.map((c) => ({
+        width: typeof (c as { width?: unknown })?.width === 'number'
+          ? (c as { width: number }).width
+          : 0,
+      }))
+    : [];
+  const rows = rb.rows.map((r, ri) => {
+    const rr = (r ?? {}) as Record<string, unknown>;
+    if (!Array.isArray(rr.cells)) throw new Error(`Table ${i} row ${ri} has no cells`);
+    return {
+      id: typeof rr.id === 'string' && rr.id ? rr.id : newId(),
+      headerRow: rr.headerRow === true,
+      cells: rr.cells.map((cell) =>
+        Array.isArray(cell)
+          ? cell.map((pb, pi) => coerceParagraph(pb, `Table ${i} row ${ri} cell ${pi}`))
+          : []
+      ),
+    };
+  });
+  return {
+    kind: 'table',
+    id: typeof rb.id === 'string' && rb.id ? rb.id : newId(),
+    cols,
+    rows,
   };
 }
 

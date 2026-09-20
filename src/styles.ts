@@ -241,6 +241,28 @@ const LIST_CSS =
     )
     .join('');
 
+/**
+ * Tables. Widths come from the document's own w:tblGrid, so the layout is
+ * fixed rather than content-driven - a browser's automatic table layout would
+ * silently disagree with what Word measured and change where rows break.
+ */
+const TABLE_CSS =
+  '.blk-table { margin: 0; padding: 0 0 4px; }\n' +
+  '.blk-table table {\n' +
+  '  border-collapse: collapse;\n' +
+  '  table-layout: fixed;\n' +
+  '  width: 100%;\n' +
+  '}\n' +
+  '.blk-table td {\n' +
+  '  border: 1px solid #bbbbbb;\n' +
+  '  padding: 3px 5px;\n' +
+  '  vertical-align: top;\n' +
+  '  overflow-wrap: break-word;\n' +
+  '}\n' +
+  '.blk-table tr.hdr td { background: #f3f3f3; }\n' +
+  '.blk-table td.merged { border-left: 0; }\n' +
+  '.blk-table .blk:last-child { padding-bottom: 0; }\n';
+
 const SPLIT_CSS =
   '.blk.split-cont { padding-top: 0; text-indent: 0; }\n' +
   '.blk.split-cont::before { content: none; }\n' +
@@ -256,6 +278,7 @@ export function injectStyleSheet(): void {
     `.blk { font-family: ${DOC_FONT}; color: ${INK}; }\n` +
     STYLE_IDS.map((s) => css(STYLES[s])).join('') +
     LIST_CSS +
+    TABLE_CSS +
     SPLIT_CSS;
   document.head.appendChild(el);
 }

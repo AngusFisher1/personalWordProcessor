@@ -12,7 +12,8 @@
     "build:harness": "vite build --config test/vite.harness.config.ts",
     "test:roundtrip": "npm run build:harness && node test/roundtrip.mjs",
     "test:infer": "npm run build:harness && node test/infer.test.mjs",
-    "test": "npm run build:harness && node test/infer.test.mjs && node test/roundtrip.mjs"
+    "test": "npm run build:harness && node test/infer.test.mjs && node test/table.test.mjs && node test/roundtrip.mjs",
+    "test:table": "npm run build:harness && node test/table.test.mjs"
   },
   "devDependencies": {
     "@xmldom/xmldom": "^0.9.12",

@@ -63,6 +63,12 @@ export interface Vault {
   styleBack: Map<string, string>;
   /** Hyperlink target back to its relationship id, so links survive an edit. */
   relByTarget: Map<string, string>;
+  /** Per table: its w:tblPr and w:tblGrid, so an edited table keeps them. */
+  tablePr: Map<string, { tblPr: string; tblGrid: string }>;
+  /** Per row id: its w:trPr. */
+  rowPr: Map<string, string>;
+  /** Per "<rowId>c<index>": that cell's w:tcPr, which carries any gridSpan. */
+  cellPr: Map<string, string>;
   opaque: OpaqueEntry[];
   /** Body-level <w:sectPr>, which must stay last in the body. */
   sectPrXml: string | null;
@@ -81,6 +87,9 @@ export function emptyVault(): Vault {
     blockStyle: new Map(),
     styleBack: new Map(),
     relByTarget: new Map(),
+    tablePr: new Map(),
+    rowPr: new Map(),
+    cellPr: new Map(),
     opaque: [],
     sectPrXml: null,
     warnings: [],

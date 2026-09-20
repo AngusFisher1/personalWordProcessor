@@ -11,8 +11,8 @@ import {
   UnderlineType,
 } from 'docx';
 import type { IParagraphStyleOptions, ParagraphChild } from 'docx';
-import type { Block, Doc, Margins, StyleId } from './model';
-import { STYLE_IDS } from './model';
+import type { Block, Doc, Margins, ParagraphBlock, StyleId } from './model';
+import { STYLE_IDS, isTable } from './model';
 import { DOCX_FONT, INK, RULE_COLOR, STYLES } from './styles';
 import type { Vault } from './docx-package';
 import { repack } from './docx-package';
@@ -148,7 +148,7 @@ function runsFrom(html: string): ParagraphChild[] {
   return out;
 }
 
-function toParagraph(b: Block): Paragraph {
+function toParagraph(b: ParagraphBlock): Paragraph {
   const isBullet = STYLES[b.styleId].bullet;
   return new Paragraph({
     style: b.styleId,
@@ -157,8 +157,20 @@ function toParagraph(b: Block): Paragraph {
   });
 }
 
-function trimTrailingEmpty(blocks: Block[]): Block[] {
-  const out = blocks.slice();
+/**
+ * The fresh-export path has no table support yet, so a table is flattened to
+ * its cell paragraphs rather than dropped. Imported documents never take this
+ * path: they export through the vault, which preserves the table whole.
+ */
+function flatten(blocks: Block[]): ParagraphBlock[] {
+  const out: ParagraphBlock[] = [];
+  for (const b of blocks) {
+    if (isTable(b)) {
+      for (const row of b.rows) for (const cell of row.cells) out.push(...cell);
+    } else {
+      out.push(b);
+    }
+  }
   while (out.length > 1 && out[out.length - 1].html.trim() === '') out.pop();
   return out;
 }
@@ -230,7 +242,7 @@ async function exportFresh(doc: Doc): Promise<Blob> {
             margin: pageMargin(doc.page.margins),
           },
         },
-        children: trimTrailingEmpty(doc.blocks).map(toParagraph),
+        children: flatten(doc.blocks).map(toParagraph),
       },
     ],
   });

@@ -1,4 +1,5 @@
-import type { Block, Doc } from './model';
+import type { Block, Doc, ParagraphBlock, TableBlock } from './model';
+import { isTable } from './model';
 import type { RunProp, Vault } from './docx-package';
 import { addWarning } from './docx-package';
 
@@ -175,7 +176,54 @@ function withStyle(pPr: string, styleId: string | undefined): string {
   return pPr.slice(0, m[0].length) + tag + pPr.slice(m[0].length);
 }
 
-function paragraphXml(b: Block, vault: Vault): string {
+function blockXml(b: Block, vault: Vault): string {
+  if (isTable(b)) return tableXml(b, vault);
+  return paragraphXml(b, vault);
+}
+
+/** True when nothing inside the table has changed since it was imported. */
+function tableUnchanged(t: TableBlock, vault: Vault): boolean {
+  if (!vault.blockXml.has(t.id)) return false;
+  for (const row of t.rows) {
+    for (const cell of row.cells) {
+      for (const p of cell) {
+        if (!vault.blockXml.has(p.id)) return false;
+        if (vault.blockHtml.get(p.id) !== p.html) return false;
+        if (vault.blockStyle.get(p.id) !== p.styleId) return false;
+      }
+    }
+  }
+  return true;
+}
+
+/**
+ * An untouched table goes back verbatim. An edited one is rebuilt keeping its
+ * w:tblPr, w:tblGrid and every w:trPr and w:tcPr, so borders, widths, shading
+ * and merges survive an edit to the words inside a cell.
+ */
+function tableXml(t: TableBlock, vault: Vault): string {
+  const original = vault.blockXml.get(t.id);
+  if (original && tableUnchanged(t, vault)) return original;
+
+  const pr = vault.tablePr.get(t.id);
+  let out = '<w:tbl>' + (pr?.tblPr ?? '') + (pr?.tblGrid ?? '');
+  for (const row of t.rows) {
+    out += '<w:tr>' + (vault.rowPr.get(row.id) ?? '');
+    for (let i = 0; i < row.cells.length; i++) {
+      const cell = row.cells[i];
+      // Placeholders stand for columns a gridSpan absorbed; the real cell's
+      // preserved w:tcPr already carries that span.
+      if (cell.length === 0) continue;
+      out += '<w:tc>' + (vault.cellPr.get(`${row.id}c${i}`) ?? '');
+      for (const p of cell) out += paragraphXml(p, vault);
+      out += '</w:tc>';
+    }
+    out += '</w:tr>';
+  }
+  return out + '</w:tbl>';
+}
+
+function paragraphXml(b: ParagraphBlock, vault: Vault): string {
   const original = vault.blockXml.get(b.id);
   const sameText = vault.blockHtml.get(b.id) === b.html;
   const sameStyle = vault.blockStyle.get(b.id) === b.styleId;
@@ -217,17 +265,24 @@ export function buildBody(doc: Doc, vault: Vault): string {
   // Drop the trailing empty block the editor keeps for clicking below the
   // last line - it is ours, not the document's.
   const blocks = doc.blocks.slice();
-  while (
-    blocks.length > 1 &&
-    blocks[blocks.length - 1].html.trim() === '' &&
-    !vault.blockXml.has(blocks[blocks.length - 1].id)
-  ) {
-    blocks.pop();
+  for (;;) {
+    const last = blocks[blocks.length - 1];
+    if (
+      blocks.length > 1 &&
+      last &&
+      !isTable(last) &&
+      last.html.trim() === '' &&
+      !vault.blockXml.has(last.id)
+    ) {
+      blocks.pop();
+    } else {
+      break;
+    }
   }
 
   const present = new Set(blocks.map((b) => b.id));
   for (const b of blocks) {
-    out += paragraphXml(b, vault);
+    out += blockXml(b, vault);
     emitAfter(b.id);
   }
 

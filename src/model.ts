@@ -85,7 +85,9 @@ export function isStyleId(x: unknown): x is StyleId {
   return typeof x === 'string' && (STYLE_IDS as readonly string[]).includes(x);
 }
 
-export interface Block {
+export interface ParagraphBlock {
+  /** Optional so every paragraph written before tables existed still parses. */
+  kind?: 'para';
   id: string;
   styleId: StyleId;
   /** Inline markup only: b, i, u, a, br. Anything else is stripped on the way in. */
@@ -112,6 +114,50 @@ export interface Block {
   listLevel?: number;
 }
 
+/**
+ * A cell holds an array of paragraphs, so the existing renderer, styles and
+ * caret code work inside a cell unchanged. Nested tables are out of scope.
+ */
+export type TableCell = ParagraphBlock[];
+
+export interface TableRow {
+  id: string;
+  /** Repeated at the top of each page the table continues onto. */
+  headerRow: boolean;
+  cells: TableCell[];
+}
+
+export interface TableBlock {
+  kind: 'table';
+  id: string;
+  /** px, summing to the content width. */
+  cols: { width: number }[];
+  rows: TableRow[];
+}
+
+export type Block = ParagraphBlock | TableBlock;
+
+export function isTable(b: Block): b is TableBlock {
+  return (b as TableBlock).kind === 'table';
+}
+
+export function isParagraph(b: Block): b is ParagraphBlock {
+  return !isTable(b);
+}
+
+/** Every paragraph in a document, including the ones inside table cells. */
+export function paragraphsOf(blocks: Block[]): ParagraphBlock[] {
+  const out: ParagraphBlock[] = [];
+  for (const b of blocks) {
+    if (isTable(b)) {
+      for (const row of b.rows) for (const cell of row.cells) out.push(...cell);
+    } else {
+      out.push(b);
+    }
+  }
+  return out;
+}
+
 export interface Doc {
   id: string;
   title: string;
@@ -130,7 +176,7 @@ export function newId(): string {
   return 'id-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
 }
 
-export function newBlock(styleId: StyleId, html = ''): Block {
+export function newBlock(styleId: StyleId, html = ''): ParagraphBlock {
   return { id: newId(), styleId, html };
 }
 

@@ -1,5 +1,14 @@
-import type { Block, Doc, PageSetup, StyleId } from './model';
-import { newId } from './model';
+import type {
+  Block,
+  Doc,
+  PageSetup,
+  ParagraphBlock,
+  StyleId,
+  TableBlock,
+  TableCell,
+  TableRow,
+} from './model';
+import { contentWidth as contentWidthOf, newId } from './model';
 import type { RunProp, Vault } from './docx-package';
 import {
   DOC_XML,
@@ -642,12 +651,151 @@ export async function importDocx(
   }
   const ctx: Ctx = { rels, vault };
   const counters = new ListCounters();
+  const page = readSectPr(kid(body, 'sectPr'));
 
   const blocks: Block[] = [];
   const signals: ParaSignals[] = [];
   const pStyles: (string | null)[] = [];
+  /** Parallel to `signals`, so inference can write its answer back. */
+  const paragraphs: ParagraphBlock[] = [];
   let lastBlockId: string | null = null;
   let index = -1;
+
+  /** Read one w:p. Used for body paragraphs and for the ones inside cells. */
+  const readParagraph = (el: Element, id: string): ParagraphBlock => {
+    const pPr = kid(el, 'pPr');
+    const pStyle = wAttr(kid(pPr, 'pStyle'), 'val');
+    const numPr = kid(pPr, 'numPr');
+
+    let listMarker: string | undefined;
+    let listLevel: number | undefined;
+    let isList = false;
+    if (numPr) {
+      const numId = wAttr(kid(numPr, 'numId'), 'val');
+      const ilvl = intOf(wAttr(kid(numPr, 'ilvl'), 'val'), 0);
+      if (numId && numId !== '0') {
+        isList = true;
+        listMarker = counters.marker(numbering, numId, ilvl);
+        listLevel = ilvl;
+      }
+    }
+
+    const pieces: Piece[] = [];
+    walkInline(el, { b: false, i: false, u: false }, null, pieces, ctx);
+    const html = piecesToHtml(pieces);
+    const stats = paragraphStats(el, serialize);
+    const outline = kid(pPr, 'outlineLvl');
+    const bdr = kid(pPr, 'pBdr');
+
+    signals.push({
+      explicit: recognizedStyle(pStyle, styleNames),
+      outlineLvl: outline ? intOf(wAttr(outline, 'val'), 0) : null,
+      sizeHalfPt: stats.sizeHalfPt,
+      boldShare: stats.boldShare,
+      caps: stats.caps,
+      ruled: !!kid(bdr, 'bottom'),
+      centered: wAttr(kid(pPr, 'jc'), 'val') === 'center',
+      textLen: stats.text.trim().length,
+      isList,
+      contactish: looksLikeContact(stats.text),
+    });
+    pStyles.push(pStyle);
+
+    vault.blockXml.set(id, serialize(el));
+    if (pPr) vault.blockPPr.set(id, serialize(pPr));
+    if (stats.baseRPr.length > 0) vault.blockRPr.set(id, stats.baseRPr);
+    vault.blockHtml.set(id, html);
+
+    const block: ParagraphBlock = {
+      id,
+      styleId: 'Body', // replaced once the whole document has been measured
+      html,
+      ...(listMarker !== undefined ? { listMarker } : {}),
+      ...(listLevel ? { listLevel } : {}),
+    };
+    paragraphs.push(block);
+    return block;
+  };
+
+  /**
+   * w:tbl maps straight across. Column widths come from w:tblGrid in twips,
+   * and w:tblHeader on a row marks it as one to repeat. The whole table XML
+   * also goes into the vault, so a table nobody edited exports verbatim.
+   */
+  const readTable = (tbl: Element, id: string): TableBlock => {
+    const contentW = contentWidthOf(page);
+    // Raw first: clamping each column before summing turns a grid of zeroes
+    // into a table 8px wide instead of one we should lay out ourselves.
+    const grid = kids(kid(tbl, 'tblGrid'), 'gridCol').map((g) =>
+      Math.round(twipToPx(intOf(wAttr(g, 'w'), 0)))
+    );
+    const gridSum = grid.reduce((a, b) => a + b, 0);
+
+    const rows: TableRow[] = [];
+    let ri = -1;
+    for (const tr of kids(tbl, 'tr')) {
+      ri++;
+      const rowId = `${id}r${ri}`;
+      const trPr = kid(tr, 'trPr');
+      if (trPr) vault.rowPr.set(rowId, serialize(trPr));
+
+      const cells: TableCell[] = [];
+      for (const tc of kids(tr, 'tc')) {
+        // Index into `cells`, which includes the placeholders a gridSpan
+        // leaves behind, so import and export agree on cell keys.
+        const slot = cells.length;
+        const tcPr = kid(tc, 'tcPr');
+        if (tcPr) vault.cellPr.set(`${rowId}c${slot}`, serialize(tcPr));
+
+        const paras = kids(tc, 'p').map((pEl, pi) =>
+          readParagraph(pEl, `${rowId}c${slot}p${pi}`)
+        );
+        if (paras.length === 0) {
+          paras.push({ id: `${rowId}c${slot}p0`, styleId: 'Body', html: '' });
+        }
+        cells.push(paras);
+        // A cell merged across columns is followed by that many empty cells,
+        // which the renderer turns back into a colspan. Keeping them means
+        // the row still has one entry per grid column.
+        const span = intOf(wAttr(kid(tcPr, 'gridSpan'), 'val'), 1);
+        for (let k = 1; k < span; k++) cells.push([]);
+      }
+      rows.push({
+        id: rowId,
+        headerRow: !!kid(trPr, 'tblHeader'),
+        cells,
+      });
+    }
+
+    const tblPr = kid(tbl, 'tblPr');
+    const tblGrid = kid(tbl, 'tblGrid');
+    vault.tablePr.set(id, {
+      tblPr: tblPr ? serialize(tblPr) : '',
+      tblGrid: tblGrid ? serialize(tblGrid) : '',
+    });
+
+    const columnCount = Math.max(
+      1,
+      grid.length,
+      ...rows.map((r) => r.cells.length)
+    );
+    /**
+     * A grid is only usable if it describes a table of roughly the right
+     * size. Some writers emit a w:tblGrid of nominal widths and size the
+     * table by percentage instead, which would otherwise produce a table a
+     * few pixels wide. Anything wider than the page is scaled down to fit.
+     */
+    let widths: number[];
+    if (gridSum >= contentW * 0.5) {
+      const scale = gridSum > contentW ? contentW / gridSum : 1;
+      widths = grid.map((w) => Math.max(8, Math.round(w * scale)));
+    } else {
+      widths = new Array(columnCount).fill(Math.floor(contentW / columnCount));
+    }
+
+    vault.blockXml.set(id, serialize(tbl));
+    return { kind: 'table', id, cols: widths.map((w) => ({ width: w })), rows };
+  };
 
   for (const node of Array.from(body.childNodes)) {
     index++;
@@ -674,75 +822,26 @@ export async function importDocx(
 
     if (name === 'p') {
       const id = bodyBlockId(index);
-      const pPr = kid(child, 'pPr');
-      const pStyle = wAttr(kid(pPr, 'pStyle'), 'val');
-      const numPr = kid(pPr, 'numPr');
+      blocks.push(readParagraph(child, id));
+      lastBlockId = id;
+      continue;
+    }
 
-      let listMarker: string | undefined;
-      let listLevel: number | undefined;
-      let isList = false;
-      if (numPr) {
-        const numId = wAttr(kid(numPr, 'numId'), 'val');
-        const ilvl = intOf(wAttr(kid(numPr, 'ilvl'), 'val'), 0);
-        if (numId && numId !== '0') {
-          isList = true;
-          listMarker = counters.marker(numbering, numId, ilvl);
-          listLevel = ilvl;
-        }
-      }
-
-      const pieces: Piece[] = [];
-      walkInline(child, { b: false, i: false, u: false }, null, pieces, ctx);
-      const html = piecesToHtml(pieces);
-      const stats = paragraphStats(child, serialize);
-      const outline = kid(pPr, 'outlineLvl');
-      const bdr = kid(pPr, 'pBdr');
-
-      signals.push({
-        explicit: recognizedStyle(pStyle, styleNames),
-        outlineLvl: outline ? intOf(wAttr(outline, 'val'), 0) : null,
-        sizeHalfPt: stats.sizeHalfPt,
-        boldShare: stats.boldShare,
-        caps: stats.caps,
-        ruled: !!kid(bdr, 'bottom'),
-        centered: wAttr(kid(pPr, 'jc'), 'val') === 'center',
-        textLen: stats.text.trim().length,
-        isList,
-        contactish: looksLikeContact(stats.text),
-      });
-      pStyles.push(pStyle);
-
-      vault.blockXml.set(id, serialize(child));
-      if (pPr) vault.blockPPr.set(id, serialize(pPr));
-      if (stats.baseRPr.length > 0) vault.blockRPr.set(id, stats.baseRPr);
-      vault.blockHtml.set(id, html);
-
-      blocks.push({
-        id,
-        styleId: 'Body', // replaced below, once the whole document is known
-        html,
-        ...(listMarker !== undefined ? { listMarker } : {}),
-        ...(listLevel ? { listLevel } : {}),
-      });
+    if (name === 'tbl') {
+      const id = bodyBlockId(index);
+      blocks.push(readTable(child, id));
       lastBlockId = id;
       continue;
     }
 
     // Everything else is preserved but not rendered.
-    const kindName =
-      name === 'tbl'
-        ? 'tables'
-        : name === 'sdt'
-          ? 'contentControls'
-          : 'otherContent';
+    const kindName = name === 'sdt' ? 'contentControls' : 'otherContent';
     addWarning(
       vault,
       kindName,
-      kindName === 'tables'
-        ? 'Tables are preserved but not shown'
-        : kindName === 'contentControls'
-          ? 'Content controls are preserved but not shown'
-          : 'Some content is preserved but not shown'
+      kindName === 'contentControls'
+        ? 'Content controls are preserved but not shown'
+        : 'Some content is preserved but not shown'
     );
     vault.opaque.push({
       xml: serialize(child),
@@ -755,7 +854,7 @@ export async function importDocx(
   // a heading depends on how big the body text is, which is not knowable
   // until every paragraph has been measured.
   const resolved = inferStyles(signals, defaultSizeHalfPt);
-  blocks.forEach((b, i) => {
+  paragraphs.forEach((b, i) => {
     b.styleId = resolved[i];
     vault.blockStyle.set(b.id, b.styleId);
     // Remember a real style id for each of ours, so blocks added later can
@@ -771,7 +870,7 @@ export async function importDocx(
   const doc: Doc = {
     id: newId(),
     title: fileName.replace(/\.docx$/i, '') || 'Untitled',
-    page: readSectPr(kid(body, 'sectPr')),
+    page,
     blocks,
   };
 

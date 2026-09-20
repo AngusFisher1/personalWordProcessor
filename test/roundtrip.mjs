@@ -152,7 +152,10 @@ async function run(path) {
   else notIdentical.push(file);
 
   // editing one paragraph must not disturb anything else
-  const target = doc.blocks.findIndex((b) => b.html.length > 10);
+  // Tables have no html of their own; edit the first real paragraph.
+  const target = doc.blocks.findIndex(
+    (b) => b.kind !== 'table' && typeof b.html === 'string' && b.html.length > 10
+  );
   if (target >= 0) {
     const edited = {
       ...doc,

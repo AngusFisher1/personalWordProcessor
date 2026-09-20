@@ -167,6 +167,7 @@ function buildToolbar(host: HTMLElement): void {
   );
   host.appendChild(inlineGroup(ui.bold, ui.italic, ui.underline));
 
+
   ui.page = menuButton('Margins', 'Page margins', () => {
     const preset = marginPreset(doc.page);
     return [
@@ -204,7 +205,13 @@ function buildToolbar(host: HTMLElement): void {
   host.appendChild(ui.palette.el);
 
   host.appendChild(
-    textButton('Print', `Print or save as PDF (${MOD}P)`, () => void printDocument())
+    textButton(
+      'Print',
+      `Print or save as PDF (${MOD}P)`,
+      () => void printDocument(),
+      '',
+      MOD + 'P'
+    )
   );
 }
 

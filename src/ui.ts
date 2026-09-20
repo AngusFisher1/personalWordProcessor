@@ -34,12 +34,27 @@ export function textButton(
   label: string,
   title: string,
   onClick: () => void,
-  cls = ''
+  cls = '',
+  key?: string
 ): HTMLButtonElement {
   const b = document.createElement('button');
   b.className = ('tb-btn ' + cls).trim();
-  b.textContent = label;
   b.title = title;
+
+  const text = document.createElement('span');
+  text.className = 'tb-label';
+  text.textContent = label;
+  b.appendChild(text);
+
+  // The shortcut doubles as an affordance: a row with a key beside it reads
+  // as something you can press, not as a line of prose.
+  if (key) {
+    const k = document.createElement('span');
+    k.className = 'tb-key';
+    k.textContent = key;
+    b.appendChild(k);
+  }
+
   noFocus(b);
   b.addEventListener('click', onClick);
   return b;

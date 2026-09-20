@@ -10,7 +10,7 @@ import {
   uniformMargins,
 } from './model';
 import { DOC_FONT, STYLES, injectStyleSheet } from './styles';
-import { docEl, readModel, renderAll } from './render';
+import { blocksIn, docEl, readModel, renderAll } from './render';
 import {
   clearHeightCache,
   currentPageSetup,
@@ -28,6 +28,7 @@ import {
   setBlockStyle,
   toggleInline,
 } from './commands';
+import { caretAtStart } from './caret';
 import { bindPaste } from './paste';
 import {
   canRedo,
@@ -464,6 +465,13 @@ function openDoc(d: Doc): void {
   ensureTrailingBlock();
   paginate();
   resetHistory();
+  // Put the caret at the top so the document is ready to type into, and so
+  // the toolbar has a paragraph to report the style of.
+  const first = blocksIn(docEl())[0];
+  if (first) {
+    docEl().focus();
+    caretAtStart(first);
+  }
   updateToolbar();
 }
 

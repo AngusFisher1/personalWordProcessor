@@ -13,6 +13,7 @@
  */
 import {
   AlignmentType,
+  BorderStyle,
   Document,
   ExternalHyperlink,
   Footer,
@@ -290,7 +291,71 @@ async function links() {
   );
 }
 
-/* ---------------- 9. hand-built: tracked changes + content control ----------
+/* ---------------- 9. a directly formatted resume ----------------------------
+ * The shape real documents actually have: no named styles anywhere, headings
+ * made out of bold, capitals, size and a rule. This is the case the style
+ * mapping table cannot see, so it is what the inference has to earn.
+ * ---------------------------------------------------------------------- */
+async function directResume() {
+  const rule = {
+    bottom: { style: BorderStyle.SINGLE, size: 6, space: 1, color: '999999' },
+  };
+  const line = (text, o = {}) =>
+    new Paragraph({
+      children: [new TextRun({ text, font: 'Calibri', size: o.size ?? 22, bold: o.bold })],
+      ...(o.border ? { border: rule } : {}),
+      ...(o.align ? { alignment: o.align } : {}),
+    });
+
+  await save(
+    'resume-direct.docx',
+    new Document({
+      numbering: {
+        config: [
+          {
+            reference: 'plain-bullets',
+            levels: [
+              { level: 0, format: LevelFormat.BULLET, text: '•', alignment: AlignmentType.LEFT },
+            ],
+          },
+        ],
+      },
+      sections: [
+        {
+          children: [
+            line('DANA WHITFIELD', { size: 40, bold: true, align: AlignmentType.CENTER }),
+            line('Bristol · dana@example.com · (555) 010-0100', { size: 18 }),
+            line('EXPERIENCE', { size: 24, bold: true, border: true }),
+            // Partly bold, the usual "Title, Company - dates" idiom.
+            new Paragraph({
+              children: [
+                new TextRun({ text: 'Staff Engineer, Northwind', font: 'Calibri', size: 22, bold: true }),
+                new TextRun({ text: ' — 2022 to present', font: 'Calibri', size: 22 }),
+              ],
+            }),
+            new Paragraph({
+              numbering: { reference: 'plain-bullets', level: 0 },
+              children: [new TextRun({ text: 'Rebuilt the billing pipeline.', font: 'Calibri', size: 22 })],
+            }),
+            new Paragraph({
+              numbering: { reference: 'plain-bullets', level: 0 },
+              children: [new TextRun({ text: 'Mentored four engineers.', font: 'Calibri', size: 22 })],
+            }),
+            line('EDUCATION', { size: 24, bold: true, border: true }),
+            line('B.S. Computer Science, State University, 2019'),
+            line('SKILLS', { size: 24, bold: true, border: true }),
+            line('TypeScript, Go, Postgres, distributed systems, technical writing'),
+            line(
+              'A closing paragraph long enough that nothing could mistake it for a heading, running past the length where a line stops being a label and starts being prose.'
+            ),
+          ],
+        },
+      ],
+    })
+  );
+}
+
+/* ---------------- 10. hand-built: tracked changes + content control ---------
  * The docx library has no API for revision marks, and they are exactly the
  * kind of thing the preservation vault exists for, so this one is written as
  * raw OOXML.
@@ -365,5 +430,6 @@ await landscape();
 await legal();
 await letterhead();
 await links();
+await directResume();
 await trackedChanges();
 console.log('Done. Add real .docx files to test/corpus/ - the harness picks them up.');

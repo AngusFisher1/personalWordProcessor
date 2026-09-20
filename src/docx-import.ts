@@ -1,6 +1,6 @@
 import type { Block, Doc, PageSetup, StyleId } from './model';
 import { newId } from './model';
-import type { Vault } from './docx-package';
+import type { RunProp, Vault } from './docx-package';
 import {
   DOC_XML,
   addWarning,
@@ -8,6 +8,8 @@ import {
   partText,
   unzip,
 } from './docx-package';
+import type { ParaSignals } from './docx-infer';
+import { inferStyles, looksLikeContact } from './docx-infer';
 
 /**
  * Parse OOXML directly rather than converting through HTML.
@@ -258,25 +260,55 @@ const STYLE_BY_NAME: Record<string, StyleId> = {
   nospacing: 'Body',
 };
 
-function readStyleNames(xml: string | null): Map<string, string> {
-  const out = new Map<string, string>();
-  if (!xml) return out;
+interface StyleInfo {
+  names: Map<string, string>;
+  /** w:docDefaults run size in half-points, for judging what counts as big. */
+  defaultSizeHalfPt: number | null;
+}
+
+function readStyles(xml: string | null): StyleInfo {
+  const names = new Map<string, string>();
+  if (!xml) return { names, defaultSizeHalfPt: null };
   const doc = new DOMParser().parseFromString(xml, 'application/xml');
   const root = doc.documentElement;
+
   for (const st of kids(root, 'style')) {
     const id = wAttr(st, 'styleId');
     const name = wAttr(kid(st, 'name'), 'val');
-    if (id) out.set(id, name ?? id);
+    if (id) names.set(id, name ?? id);
   }
-  return out;
+
+  let size: number | null = null;
+  const fromDefaults = kid(
+    kid(kid(root, 'docDefaults'), 'rPrDefault'),
+    'rPr'
+  );
+  const dsz = intOf(wAttr(kid(fromDefaults, 'sz'), 'val'), 0);
+  if (dsz > 0) size = dsz;
+  if (size === null) {
+    // Fall back to whichever paragraph style is marked as the default.
+    for (const st of kids(root, 'style')) {
+      if (wAttr(st, 'default') !== '1' && wAttr(st, 'default') !== 'true') continue;
+      const sz = intOf(wAttr(kid(kid(st, 'rPr'), 'sz'), 'val'), 0);
+      if (sz > 0) {
+        size = sz;
+        break;
+      }
+    }
+  }
+  return { names, defaultSizeHalfPt: size };
 }
 
 /**
- * Unknown styles fall back to Body while direct run formatting is preserved,
- * and the original w:pStyle goes back out on export, so nothing is lost.
+ * A style we do not recognize returns null so the paragraph goes to the
+ * inference pass instead of silently becoming Body. Either way the original
+ * w:pStyle goes back out on export, so nothing is lost.
  */
-function mapStyle(styleId: string | null, names: Map<string, string>): StyleId {
-  if (!styleId) return 'Body';
+function recognizedStyle(
+  styleId: string | null,
+  names: Map<string, string>
+): StyleId | null {
+  if (!styleId) return null;
   const byId = STYLE_BY_NAME[normalizeName(styleId)];
   if (byId) return byId;
   const name = names.get(styleId);
@@ -284,7 +316,84 @@ function mapStyle(styleId: string | null, names: Map<string, string>): StyleId {
     const byName = STYLE_BY_NAME[normalizeName(name)];
     if (byName) return byName;
   }
-  return 'Body';
+  // Unrecognized: fall through to inference rather than silently to Body.
+  return null;
+}
+
+/* ------------------------------------------------------------------ *
+ * Paragraph statistics, for inferring a style when none is given
+ * ------------------------------------------------------------------ */
+
+/** rPr children we manage from the markup instead of preserving. */
+const OWNED_RUN_PROPS = new Set(['b', 'bCs', 'i', 'iCs', 'u']);
+
+interface Stats {
+  boldShare: number;
+  caps: boolean;
+  sizeHalfPt: number | null;
+  baseRPr: RunProp[];
+  text: string;
+}
+
+/**
+ * Measure a paragraph by how many CHARACTERS carry each property, not by how
+ * many runs do. Word splits a line into runs for reasons of its own - a spell
+ * check boundary, an edit session - so counting runs weights a one-character
+ * fragment the same as the rest of the sentence.
+ */
+function paragraphStats(p: Element, serialize: (el: Element) => string): Stats {
+  let boldChars = 0;
+  let capsChars = 0;
+  let baseRPr: RunProp[] = [];
+  let text = '';
+  const bySize = new Map<number, number>();
+
+  const all = p.getElementsByTagName('*');
+  for (let i = 0; i < all.length; i++) {
+    const el = all[i] as Element;
+    if (el.localName !== 'r') continue;
+
+    let t = '';
+    for (const c of elementChildren(el)) {
+      if (c.localName === 't') t += c.textContent ?? '';
+      else if (c.localName === 'tab') t += ' ';
+    }
+    if (t === '') continue;
+
+    text += t;
+    const rPr = kid(el, 'rPr');
+    if (onOff(kid(rPr, 'b'))) boldChars += t.length;
+    if (onOff(kid(rPr, 'caps'))) capsChars += t.length;
+    const sz = intOf(wAttr(kid(rPr, 'sz'), 'val'), 0);
+    if (sz > 0) bySize.set(sz, (bySize.get(sz) ?? 0) + t.length);
+    if (baseRPr.length === 0 && rPr) {
+      baseRPr = elementChildren(rPr)
+        .filter((c) => !OWNED_RUN_PROPS.has(c.localName))
+        .map((c) => ({ name: c.localName, xml: serialize(c) }));
+    }
+  }
+
+  let size: number | null = null;
+  let bestChars = 0;
+  for (const [sz, chars] of bySize) {
+    if (chars > bestChars) {
+      size = sz;
+      bestChars = chars;
+    }
+  }
+
+  const letters = text.replace(/[^A-Za-z]/g, '');
+  const caps =
+    (text.length > 0 && capsChars === text.length) ||
+    (letters.length >= 4 && text === text.toUpperCase());
+
+  return {
+    boldShare: text.length > 0 ? boldChars / text.length : 0,
+    caps,
+    sizeHalfPt: size,
+    baseRPr,
+    text,
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -523,7 +632,9 @@ export async function importDocx(
   if (!body) throw new Error('Not a Word document: no body element');
 
   const serialize = makeSerializer(xml.documentElement);
-  const styleNames = readStyleNames(partText(parts, 'word/styles.xml'));
+  const { names: styleNames, defaultSizeHalfPt } = readStyles(
+    partText(parts, 'word/styles.xml')
+  );
   const numbering = readNumbering(partText(parts, 'word/numbering.xml'));
   const rels = readRels(partText(parts, 'word/_rels/document.xml.rels'));
   for (const [id, target] of rels) {
@@ -533,6 +644,8 @@ export async function importDocx(
   const counters = new ListCounters();
 
   const blocks: Block[] = [];
+  const signals: ParaSignals[] = [];
+  const pStyles: (string | null)[] = [];
   let lastBlockId: string | null = null;
   let index = -1;
 
@@ -565,15 +678,14 @@ export async function importDocx(
       const pStyle = wAttr(kid(pPr, 'pStyle'), 'val');
       const numPr = kid(pPr, 'numPr');
 
-      let styleId = mapStyle(pStyle, styleNames);
       let listMarker: string | undefined;
       let listLevel: number | undefined;
-
+      let isList = false;
       if (numPr) {
         const numId = wAttr(kid(numPr, 'numId'), 'val');
         const ilvl = intOf(wAttr(kid(numPr, 'ilvl'), 'val'), 0);
         if (numId && numId !== '0') {
-          styleId = 'Bullet';
+          isList = true;
           listMarker = counters.marker(numbering, numId, ilvl);
           listLevel = ilvl;
         }
@@ -582,20 +694,32 @@ export async function importDocx(
       const pieces: Piece[] = [];
       walkInline(child, { b: false, i: false, u: false }, null, pieces, ctx);
       const html = piecesToHtml(pieces);
+      const stats = paragraphStats(child, serialize);
+      const outline = kid(pPr, 'outlineLvl');
+      const bdr = kid(pPr, 'pBdr');
+
+      signals.push({
+        explicit: recognizedStyle(pStyle, styleNames),
+        outlineLvl: outline ? intOf(wAttr(outline, 'val'), 0) : null,
+        sizeHalfPt: stats.sizeHalfPt,
+        boldShare: stats.boldShare,
+        caps: stats.caps,
+        ruled: !!kid(bdr, 'bottom'),
+        centered: wAttr(kid(pPr, 'jc'), 'val') === 'center',
+        textLen: stats.text.trim().length,
+        isList,
+        contactish: looksLikeContact(stats.text),
+      });
+      pStyles.push(pStyle);
 
       vault.blockXml.set(id, serialize(child));
       if (pPr) vault.blockPPr.set(id, serialize(pPr));
+      if (stats.baseRPr.length > 0) vault.blockRPr.set(id, stats.baseRPr);
       vault.blockHtml.set(id, html);
-      vault.blockStyle.set(id, styleId);
-      // Remember a real style id for each of ours, so blocks added later can
-      // be written with a style this package actually defines.
-      if (pStyle && !vault.styleBack.has(styleId)) {
-        vault.styleBack.set(styleId, pStyle);
-      }
 
       blocks.push({
         id,
-        styleId,
+        styleId: 'Body', // replaced below, once the whole document is known
         html,
         ...(listMarker !== undefined ? { listMarker } : {}),
         ...(listLevel ? { listLevel } : {}),
@@ -626,6 +750,19 @@ export async function importDocx(
       kind: kindName,
     });
   }
+
+  // Styles are decided once the whole document has been seen: what counts as
+  // a heading depends on how big the body text is, which is not knowable
+  // until every paragraph has been measured.
+  const resolved = inferStyles(signals, defaultSizeHalfPt);
+  blocks.forEach((b, i) => {
+    b.styleId = resolved[i];
+    vault.blockStyle.set(b.id, b.styleId);
+    // Remember a real style id for each of ours, so blocks added later can
+    // be written with a style this package actually defines.
+    const ps = pStyles[i];
+    if (ps && !vault.styleBack.has(b.styleId)) vault.styleBack.set(b.styleId, ps);
+  });
 
   if (blocks.length === 0) {
     blocks.push({ id: newId(), styleId: 'Body', html: '' });

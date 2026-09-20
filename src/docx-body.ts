@@ -1,5 +1,5 @@
 import type { Block, Doc } from './model';
-import type { Vault } from './docx-package';
+import type { RunProp, Vault } from './docx-package';
 import { addWarning } from './docx-package';
 
 /**
@@ -61,15 +61,39 @@ export function stripTags(html: string): string {
     .replace(/&amp;/g, '&');
 }
 
-function runXml(text: string, f: Flags): string {
+/**
+ * w:rPr children have a required order, and Word treats a run whose
+ * properties are out of order as a repair-worthy error. Preserved properties
+ * are merged with the bold/italic/underline we manage and then sorted back
+ * into this order.
+ */
+const RPR_ORDER = [
+  'rStyle', 'rFonts', 'b', 'bCs', 'i', 'iCs', 'caps', 'smallCaps', 'strike',
+  'dstrike', 'outline', 'shadow', 'emboss', 'imprint', 'noProof', 'snapToGrid',
+  'vanish', 'webHidden', 'color', 'spacing', 'w', 'kern', 'position', 'sz',
+  'szCs', 'highlight', 'u', 'effect', 'bdr', 'shd', 'fitText', 'vertAlign',
+  'rtl', 'cs', 'em', 'lang', 'eastAsianLayout', 'specVanish', 'oMath',
+];
+
+function rPrXml(f: Flags, base: RunProp[] | undefined): string {
+  const props: RunProp[] = base ? base.slice() : [];
+  if (f.b) props.push({ name: 'b', xml: '<w:b/>' });
+  if (f.i) props.push({ name: 'i', xml: '<w:i/>' });
+  if (f.u) props.push({ name: 'u', xml: '<w:u w:val="single"/>' });
+  if (props.length === 0) return '';
+  props.sort((a, b) => {
+    const ia = RPR_ORDER.indexOf(a.name);
+    const ib = RPR_ORDER.indexOf(b.name);
+    return (ia < 0 ? RPR_ORDER.length : ia) - (ib < 0 ? RPR_ORDER.length : ib);
+  });
+  return '<w:rPr>' + props.map((p) => p.xml).join('') + '</w:rPr>';
+}
+
+function runXml(text: string, f: Flags, base?: RunProp[]): string {
   if (text === '') return '';
-  let rPr = '';
-  if (f.b) rPr += '<w:b/>';
-  if (f.i) rPr += '<w:i/>';
-  if (f.u) rPr += '<w:u w:val="single"/>';
   return (
     '<w:r>' +
-    (rPr ? '<w:rPr>' + rPr + '</w:rPr>' : '') +
+    rPrXml(f, base) +
     '<w:t xml:space="preserve">' +
     esc(text) +
     '</w:t></w:r>'
@@ -77,17 +101,17 @@ function runXml(text: string, f: Flags): string {
 }
 
 /** Walk the block's inline markup into runs. Never regex the HTML. */
-function runsXml(html: string, vault: Vault): string {
+function runsXml(html: string, vault: Vault, base?: RunProp[]): string {
   const root = parseInline(html);
   // Unparseable markup still has to export as its words rather than vanish.
-  if (!root) return runXml(stripTags(html), { b: false, i: false, u: false });
+  if (!root) return runXml(stripTags(html), { b: false, i: false, u: false }, base);
 
   let out = '';
 
   const walk = (node: Node, f: Flags, href: string | null): void => {
     for (const n of Array.from(node.childNodes)) {
       if (n.nodeType === TEXT_NODE) {
-        out += runXml(n.textContent ?? '', f);
+        out += runXml(n.textContent ?? '', f, base);
         continue;
       }
       if (n.nodeType !== ELEMENT_NODE) continue;
@@ -169,7 +193,10 @@ function paragraphXml(b: Block, vault: Vault): string {
   if (!original && !pPr && backing) {
     pPr = '<w:pPr><w:pStyle w:val="' + escAttr(backing) + '"/></w:pPr>';
   }
-  return '<w:p>' + pPr + runsXml(b.html, vault) + '</w:p>';
+  // Carry the paragraph's own run formatting - size, font, colour - into the
+  // regenerated runs. Real documents keep their heading appearance there, so
+  // without this, editing a heading quietly resets it to the body font.
+  return '<w:p>' + pPr + runsXml(b.html, vault, vault.blockRPr.get(b.id)) + '</w:p>';
 }
 
 export function buildBody(doc: Doc, vault: Vault): string {

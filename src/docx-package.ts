@@ -31,6 +31,12 @@ export interface OpaqueEntry {
   kind: string;
 }
 
+/** One w:rPr child, kept by name so it can be re-inserted in schema order. */
+export interface RunProp {
+  name: string;
+  xml: string;
+}
+
 export interface Vault {
   /** Every part of the original package, as stored. */
   parts: Map<string, Uint8Array>;
@@ -42,6 +48,13 @@ export interface Vault {
   blockXml: Map<string, string>;
   /** Original <w:pPr> per block id, so an edited block keeps its properties. */
   blockPPr: Map<string, string>;
+  /**
+   * The run properties of each block's first run, minus the bold/italic/
+   * underline we manage ourselves. Real documents carry their heading
+   * formatting on the runs rather than in a style, so regenerating an edited
+   * paragraph without this resets its size and font to the document default.
+   */
+  blockRPr: Map<string, RunProp[]>;
   /** The html each block had at import, to detect whether it was edited. */
   blockHtml: Map<string, string>;
   /** The StyleId each block had at import. */
@@ -63,6 +76,7 @@ export function emptyVault(): Vault {
     docXmlSuffix: '',
     blockXml: new Map(),
     blockPPr: new Map(),
+    blockRPr: new Map(),
     blockHtml: new Map(),
     blockStyle: new Map(),
     styleBack: new Map(),

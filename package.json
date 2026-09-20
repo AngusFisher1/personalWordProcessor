@@ -10,7 +10,9 @@
     "typecheck": "tsc --noEmit",
     "corpus": "node test/make-corpus.mjs",
     "build:harness": "vite build --config test/vite.harness.config.ts",
-    "test:roundtrip": "npm run build:harness && node test/roundtrip.mjs"
+    "test:roundtrip": "npm run build:harness && node test/roundtrip.mjs",
+    "test:infer": "npm run build:harness && node test/infer.test.mjs",
+    "test": "npm run build:harness && node test/infer.test.mjs && node test/roundtrip.mjs"
   },
   "devDependencies": {
     "@xmldom/xmldom": "^0.9.12",

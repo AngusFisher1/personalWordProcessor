@@ -1,14 +1,15 @@
 import type {
   Block,
+  BlockFormat,
   Doc,
   ParagraphBlock,
   StyleId,
   TableBlock,
   TableCell,
 } from './model';
-import { isTable, newId } from './model';
+import { isTable, newId, tidyFormat } from './model';
 import { mediaUrl } from './media';
-import { styleClass, styleOf } from './styles';
+import { applyBlockFormat, styleClass, styleOf } from './styles';
 
 /* ------------------------------------------------------------------ *
  * Element construction
@@ -51,8 +52,25 @@ export function makeBlockEl(b: ParagraphBlock): HTMLElement {
   el.dataset.blockId = b.id;
   if (b.listMarker !== undefined) el.dataset.marker = b.listMarker;
   if (b.listLevel) el.dataset.level = String(b.listLevel);
+  applyBlockFormat(el, b.styleId, b.fmt);
   setBlockHtml(el, b.html);
   return el;
+}
+
+/** The direct formatting an element is currently drawn with. */
+export function formatOf(el: HTMLElement): BlockFormat | undefined {
+  const raw = el.dataset.fmt;
+  if (!raw) return undefined;
+  try {
+    return tidyFormat(JSON.parse(raw) as BlockFormat);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Change one element's direct formatting, in the DOM and on the element. */
+export function setFormatOf(el: HTMLElement, fmt: BlockFormat | undefined): void {
+  applyBlockFormat(el, styleOf(el), fmt);
 }
 
 /** Empty blocks carry a <br> in the DOM (zero-height divs are uneditable) but
@@ -87,6 +105,10 @@ export function applyStyle(el: HTMLElement, styleId: StyleId): void {
     (c) => c !== 'blk' && !c.startsWith('s-')
   );
   el.className = ['blk', styleClass(styleId), ...keep].join(' ');
+  // Direct formatting is expressed relative to the style's own padding, so
+  // it has to be recomputed against the new style rather than left as the
+  // pixel values the old one produced.
+  applyBlockFormat(el, styleId, formatOf(el));
 }
 
 /* ------------------------------------------------------------------ *
@@ -344,12 +366,14 @@ function readParagraphGroup(g: Group): ParagraphBlock {
   }
   const marker = g.head.dataset.marker;
   const level = Number(g.head.dataset.level);
+  const fmt = formatOf(g.head);
   return {
     id,
     styleId: styleOf(g.head),
     html: mergedHtml(g),
     ...(marker !== undefined ? { listMarker: marker } : {}),
     ...(Number.isFinite(level) && level > 0 ? { listLevel: level } : {}),
+    ...(fmt ? { fmt } : {}),
   };
 }
 

@@ -85,6 +85,71 @@ export function isStyleId(x: unknown): x is StyleId {
   return typeof x === 'string' && (STYLE_IDS as readonly string[]).includes(x);
 }
 
+/* ------------------------------------------------------------------ *
+ * Direct paragraph formatting
+ *
+ * The six named styles are the vocabulary this program writes in, but they
+ * are not the vocabulary the world sends. Across 63 real documents, 1,362 of
+ * 2,913 paragraphs carry an alignment, an indent or a paragraph spacing of
+ * their own. We preserved all of it on export and drew none of it, so an
+ * imported document was faithful in the file and wrong on the screen - and
+ * our page breaks landed in different places than Word's.
+ *
+ * Held in POINTS, like the style table, for the same reason: points are the
+ * unit print uses, and the conversion to CSS pixels happens once.
+ * ------------------------------------------------------------------ */
+
+export type BlockAlign = 'left' | 'center' | 'right' | 'justify';
+
+export interface BlockFormat {
+  align?: BlockAlign;
+  /** Points, from the left and right margins. */
+  indentLeft?: number;
+  indentRight?: number;
+  /** Points, signed: negative is a hanging indent, as Word's w:hanging is. */
+  firstLine?: number;
+  /** Points of space above and below, added to the style's own padding. */
+  spaceBefore?: number;
+  spaceAfter?: number;
+  /** A multiplier when lineRule is 'auto', otherwise points. */
+  lineHeight?: number;
+  lineRule?: 'auto' | 'exact' | 'atLeast';
+}
+
+const FORMAT_KEYS: (keyof BlockFormat)[] = [
+  'align',
+  'indentLeft',
+  'indentRight',
+  'firstLine',
+  'spaceBefore',
+  'spaceAfter',
+  'lineHeight',
+  'lineRule',
+];
+
+/** False for undefined and for an object that says nothing. */
+export function hasFormat(f: BlockFormat | undefined): f is BlockFormat {
+  return !!f && FORMAT_KEYS.some((k) => f[k] !== undefined);
+}
+
+export function sameFormat(a: BlockFormat | undefined, b: BlockFormat | undefined): boolean {
+  if (!hasFormat(a) && !hasFormat(b)) return true;
+  if (!hasFormat(a) || !hasFormat(b)) return false;
+  return FORMAT_KEYS.every((k) => a[k] === b[k]);
+}
+
+/** Drops the keys that say nothing, so an empty format is never stored. */
+export function tidyFormat(f: BlockFormat): BlockFormat | undefined {
+  const out: BlockFormat = {};
+  for (const k of FORMAT_KEYS) {
+    const v = f[k];
+    if (v !== undefined) (out as Record<string, unknown>)[k] = v;
+  }
+  // A line rule with no measurement is noise.
+  if (out.lineHeight === undefined) delete out.lineRule;
+  return hasFormat(out) ? out : undefined;
+}
+
 export interface ParagraphBlock {
   /** Optional so every paragraph written before tables existed still parses. */
   kind?: 'para';
@@ -112,6 +177,13 @@ export interface ParagraphBlock {
   listMarker?: string;
   /** Indent level of a list paragraph, 0-based. */
   listLevel?: number;
+
+  /**
+   * Alignment, indents and spacing the document asked for directly, rather
+   * than through its style. Absent on anything this program wrote itself:
+   * a paragraph with no direct formatting is the named style, unqualified.
+   */
+  fmt?: BlockFormat;
 }
 
 /**

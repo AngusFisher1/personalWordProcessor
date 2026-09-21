@@ -1,6 +1,6 @@
 import type { Block, Doc, ParagraphBlock, StyleId, TableBlock } from './model';
-import { PX_PER_INCH, isTable } from './model';
-import { DOC_FONT, INK, RULE_COLOR, STYLES, px } from './styles';
+import { PX_PER_INCH, hasFormat, isTable } from './model';
+import { DOC_FONT, INK, RULE_COLOR, STYLES, WORD_SINGLE_LINE, px } from './styles';
 import { parseInline, stripTags } from './docx-body';
 
 /**
@@ -267,6 +267,35 @@ function inlineToHtml(html: string, media?: MediaResolver): string {
   return out;
 }
 
+/** A paragraph's direct formatting, as a CSS declaration list. */
+function inlineFormat(b: ParagraphBlock): string {
+  const f = b.fmt;
+  if (!hasFormat(f)) return '';
+  const d = STYLES[b.styleId];
+  const [padT, padR, padB, padL] = d.padding;
+  const out: string[] = [];
+  if (f.align) out.push(`text-align:${f.align}`);
+  if (f.spaceBefore !== undefined) out.push(`padding-top:${px(padT + f.spaceBefore)}px`);
+  if (f.spaceAfter !== undefined) out.push(`padding-bottom:${px(padB + f.spaceAfter)}px`);
+  if (f.indentLeft !== undefined || f.firstLine !== undefined || f.indentRight !== undefined) {
+    const left = f.indentLeft ?? padL;
+    const first = f.firstLine ?? 0;
+    out.push(`padding-left:${px(left + Math.max(0, -first))}px`);
+    out.push(`text-indent:${px(first)}px`);
+    if (f.indentRight !== undefined) out.push(`padding-right:${px(padR + f.indentRight)}px`);
+  }
+  if (f.lineHeight !== undefined) {
+    out.push(
+      `line-height:${
+        f.lineRule === 'exact' || f.lineRule === 'atLeast'
+          ? px(f.lineHeight) + 'px'
+          : f.lineHeight * WORD_SINGLE_LINE
+      }`
+    );
+  }
+  return out.join(';');
+}
+
 function htmlBlock(b: Block, media?: MediaResolver): string {
   if (isTable(b)) {
     const rows = b.rows
@@ -290,7 +319,14 @@ function htmlBlock(b: Block, media?: MediaResolver): string {
   const marker = b.listMarker
     ? `<span style="display:inline-block;min-width:14px">${escapeHtml(b.listMarker)}</span>`
     : '';
-  return `<div class="s-${b.styleId}">${marker}${inlineToHtml(b.html, media) || '<br>'}</div>`;
+  // Direct formatting travels as inline style, the same shape the editor
+  // draws it with. Markdown has nowhere to put it, but a self-contained
+  // page that silently left a centred title flush left would be lying.
+  const fmt = inlineFormat(b);
+  return (
+    `<div class="s-${b.styleId}"${fmt ? ` style="${fmt}"` : ''}>` +
+    `${marker}${inlineToHtml(b.html, media) || '<br>'}</div>`
+  );
 }
 
 export function toHtml(doc: Doc, media?: MediaResolver): string {

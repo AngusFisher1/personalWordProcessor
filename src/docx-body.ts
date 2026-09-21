@@ -1,5 +1,5 @@
-import type { Block, Doc, ParagraphBlock, TableBlock } from './model';
-import { isTable, plainText, sectionsOf } from './model';
+import type { Block, BlockFormat, Doc, ParagraphBlock, TableBlock } from './model';
+import { isTable, plainText, sameFormat, sectionsOf } from './model';
 import type { RunProp, Vault } from './docx-package';
 import { addWarning } from './docx-package';
 
@@ -180,6 +180,161 @@ function runsXml(html: string, vault: Vault, base?: RunProp[]): string {
   return out;
 }
 
+/**
+ * w:pPr children have a required order, and Word offers to repair a file
+ * whose paragraph properties are out of it. This is the CT_PPr sequence, as
+ * far as anything we write reaches.
+ */
+const PPR_ORDER = [
+  'pStyle', 'keepNext', 'keepLines', 'pageBreakBefore', 'framePr',
+  'widowControl', 'numPr', 'suppressLineNumbers', 'pBdr', 'shd', 'tabs',
+  'suppressAutoHyphens', 'kinsoku', 'wordWrap', 'overflowPunct',
+  'topLinePunct', 'autoSpaceDE', 'autoSpaceDN', 'bidi', 'adjustRightInd',
+  'snapToGrid', 'spacing', 'ind', 'contextualSpacing', 'mirrorIndents',
+  'suppressOverlap', 'jc', 'textDirection', 'textAlignment',
+  'textboxTightWrap', 'outlineLvl', 'divId', 'cnfStyle', 'rPr', 'sectPr',
+  'pPrChange',
+];
+
+interface PPrChild {
+  name: string;
+  start: number;
+  end: number;
+}
+
+/**
+ * The top-level children of a w:pPr, with their offsets.
+ *
+ * Depth-aware rather than a flat regex: w:numPr, w:rPr and w:sectPr have
+ * children of their own, and a pattern that ignored nesting would report
+ * w:sectPr's own w:jc as a sibling and write the section's alignment onto
+ * the paragraph.
+ */
+function pPrChildren(pPr: string): PPrChild[] {
+  const out: PPrChild[] = [];
+  const tag = /<(\/?)w:([A-Za-z0-9]+)((?:"[^"]*"|'[^']*'|[^>"'])*?)(\/?)>/g;
+  let depth = 0;
+  let open: { name: string; start: number } | null = null;
+  let m: RegExpExecArray | null;
+  while ((m = tag.exec(pPr))) {
+    const [whole, closing, name, , selfClosing] = m;
+    if (closing) {
+      depth--;
+      if (depth === 1 && open && open.name === name) {
+        out.push({ name, start: open.start, end: m.index + whole.length });
+        open = null;
+      }
+      continue;
+    }
+    if (selfClosing) {
+      if (depth === 1) out.push({ name, start: m.index, end: m.index + whole.length });
+      continue;
+    }
+    depth++;
+    if (depth === 2 && !open) open = { name, start: m.index };
+  }
+  return out;
+}
+
+/**
+ * Set or remove one empty w:pPr child, keeping the schema order.
+ *
+ * Only ever called for w:jc, w:ind and w:spacing, all of which are empty
+ * elements, so nothing here has to preserve inner content.
+ */
+function setPPrChild(pPr: string, name: string, xml: string | null): string {
+  const hasWrapper = /^<w:pPr(\s[^>]*)?>/.test(pPr);
+  let body = hasWrapper
+    ? pPr.replace(/^<w:pPr(\s[^>]*)?>/, '').replace(/<\/w:pPr>$/, '')
+    : pPr;
+  const openTag = hasWrapper ? (pPr.match(/^<w:pPr(\s[^>]*)?>/) as RegExpMatchArray)[0] : '<w:pPr>';
+
+  const existing = pPrChildren('<w:pPr>' + body + '</w:pPr>').find((c) => c.name === name);
+  if (existing) {
+    // Offsets are into the wrapped string, so shift by the opening tag.
+    const shift = '<w:pPr>'.length;
+    body = body.slice(0, existing.start - shift) + body.slice(existing.end - shift);
+  }
+  if (xml) {
+    const rank = PPR_ORDER.indexOf(name);
+    const children = pPrChildren('<w:pPr>' + body + '</w:pPr>');
+    const shift = '<w:pPr>'.length;
+    const after = children.find((c) => {
+      const r = PPR_ORDER.indexOf(c.name);
+      return r < 0 ? false : r > rank;
+    });
+    const at = after ? after.start - shift : body.length;
+    body = body.slice(0, at) + xml + body.slice(at);
+  }
+  return body === '' && !xml && !hasWrapper ? '' : openTag + body + '</w:pPr>';
+}
+
+/** Points back to twips, the unit w:pPr measures in. */
+const ptToTwip = (pt: number) => Math.round(pt * 20);
+
+/**
+ * Write a paragraph's direct formatting into its w:pPr.
+ *
+ * Absent values REMOVE the element rather than leaving the imported one, so
+ * setting a centred paragraph back to left actually un-centres it in Word
+ * instead of silently keeping w:jc.
+ */
+function withFormat(pPr: string, f: BlockFormat | undefined): string {
+  let out = pPr || '<w:pPr></w:pPr>';
+
+  const align = f?.align;
+  out = setPPrChild(
+    out,
+    'jc',
+    align && align !== 'left'
+      ? '<w:jc w:val="' + (align === 'justify' ? 'both' : align) + '"/>'
+      : null
+  );
+
+  const hasInd =
+    f?.indentLeft !== undefined || f?.indentRight !== undefined || f?.firstLine !== undefined;
+  out = setPPrChild(
+    out,
+    'ind',
+    hasInd
+      ? '<w:ind' +
+          (f?.indentLeft !== undefined ? ' w:left="' + ptToTwip(f.indentLeft) + '"' : '') +
+          (f?.indentRight !== undefined ? ' w:right="' + ptToTwip(f.indentRight) + '"' : '') +
+          (f?.firstLine !== undefined && f.firstLine < 0
+            ? ' w:hanging="' + ptToTwip(-f.firstLine) + '"'
+            : f?.firstLine !== undefined && f.firstLine > 0
+              ? ' w:firstLine="' + ptToTwip(f.firstLine) + '"'
+              : '') +
+          '/>'
+      : null
+  );
+
+  const hasSpacing =
+    f?.spaceBefore !== undefined || f?.spaceAfter !== undefined || f?.lineHeight !== undefined;
+  out = setPPrChild(
+    out,
+    'spacing',
+    hasSpacing
+      ? '<w:spacing' +
+          (f?.spaceBefore !== undefined ? ' w:before="' + ptToTwip(f.spaceBefore) + '"' : '') +
+          (f?.spaceAfter !== undefined ? ' w:after="' + ptToTwip(f.spaceAfter) + '"' : '') +
+          (f?.lineHeight !== undefined
+            ? ' w:line="' +
+              (f.lineRule === 'exact' || f.lineRule === 'atLeast'
+                ? ptToTwip(f.lineHeight)
+                : Math.round(f.lineHeight * 240)) +
+              '" w:lineRule="' +
+              (f.lineRule ?? 'auto') +
+              '"'
+            : '') +
+          '/>'
+      : null
+  );
+
+  // An empty w:pPr is legal but noise; drop it if nothing is left.
+  return /^<w:pPr(\s[^>]*)?><\/w:pPr>$/.test(out) ? '' : out;
+}
+
 /** Put our style id into a preserved w:pPr, replacing any pStyle already there. */
 function withStyle(pPr: string, styleId: string | undefined): string {
   if (!styleId) return pPr;
@@ -256,7 +411,8 @@ function paragraphXml(b: ParagraphBlock, vault: Vault): string {
   const original = vault.blockXml.get(b.id);
   const sameText = vault.blockHtml.get(b.id) === b.html;
   const sameStyle = vault.blockStyle.get(b.id) === b.styleId;
-  if (original && sameText && sameStyle) return original;
+  const sameFmt = sameFormat(vault.blockFmt.get(b.id), b.fmt);
+  if (original && sameText && sameStyle && sameFmt) return original;
 
   const backing = vault.styleBack.get(b.styleId);
   let pPr = vault.blockPPr.get(b.id) ?? '';
@@ -270,6 +426,10 @@ function paragraphXml(b: ParagraphBlock, vault: Vault): string {
   if (!original && !pPr && backing) {
     pPr = '<w:pPr><w:pStyle w:val="' + escAttr(backing) + '"/></w:pPr>';
   }
+  // Only rewritten when it actually changed: an untouched paragraph keeps
+  // the w:pPr it arrived with, byte for byte, including the parts of it we
+  // have never understood.
+  if (!sameFmt) pPr = withFormat(pPr, b.fmt);
   // Carry the paragraph's own run formatting - size, font, colour - into the
   // regenerated runs. Real documents keep their heading appearance there, so
   // without this, editing a heading quietly resets it to the body font.

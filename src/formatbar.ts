@@ -1,4 +1,4 @@
-import type { StyleId } from './model';
+import type { BlockAlign, BlockFormat, StyleId } from './model';
 import { STYLE_IDS } from './model';
 import { DOC_FONT, STYLES } from './styles';
 import { docEl } from './render';
@@ -25,14 +25,31 @@ export interface FormatHost {
   setStyle(id: StyleId): void;
   currentStyle(): StyleId | null;
   inlineState(): { bold: boolean; italic: boolean; underline: boolean };
+  setAlign(align: BlockAlign): void;
+  currentFormat(): BlockFormat;
   /** Suppressed while another surface owns the selection. */
   suppressed(): boolean;
 }
+
+/**
+ * Alignment, drawn as the lines it produces.
+ *
+ * Three bars of uneven width, laid out the way the paragraph would be. A
+ * glyph would need an icon font, and the four alignments have no distinct
+ * characters in any font we can rely on - they would all come out as ≡.
+ */
+const ALIGNS: { id: BlockAlign; title: string; bars: number[] }[] = [
+  { id: 'left', title: 'Align left', bars: [100, 62, 84] },
+  { id: 'center', title: 'Centre', bars: [100, 62, 84] },
+  { id: 'right', title: 'Align right', bars: [100, 62, 84] },
+  { id: 'justify', title: 'Justify', bars: [100, 100, 100] },
+];
 
 let host: FormatHost | null = null;
 let bar: HTMLElement | null = null;
 let styleLabel: HTMLElement | null = null;
 let marks: Record<'bold' | 'italic' | 'underline', HTMLElement> | null = null;
+let aligns: { id: BlockAlign; el: HTMLElement }[] = [];
 let timer = 0;
 /** A menu opened from the bar must not make the bar hide itself. */
 let pinned = false;
@@ -112,6 +129,21 @@ function build(): HTMLElement {
   el.append(b, i, u);
   marks = { bold: b, italic: i, underline: u };
 
+  const sep2 = document.createElement('span');
+  sep2.className = 'fb-sep';
+  el.appendChild(sep2);
+
+  aligns = ALIGNS.map((a) => {
+    const btn = button('', a.title, 'fb-align fb-align-' + a.id, () => host?.setAlign(a.id));
+    for (const w of a.bars) {
+      const bar = document.createElement('i');
+      bar.style.width = w + '%';
+      btn.appendChild(bar);
+    }
+    el.appendChild(btn);
+    return { id: a.id, el: btn };
+  });
+
   return el;
 }
 
@@ -124,6 +156,8 @@ function sync(): void {
   marks?.bold.classList.toggle('on', on.bold);
   marks?.italic.classList.toggle('on', on.italic);
   marks?.underline.classList.toggle('on', on.underline);
+  const align = host.currentFormat().align ?? 'left';
+  for (const a of aligns) a.el.classList.toggle('on', a.id === align);
 }
 
 function hide(): void {
@@ -131,6 +165,7 @@ function hide(): void {
   bar = null;
   styleLabel = null;
   marks = null;
+  aligns = [];
 }
 
 /**

@@ -1,6 +1,6 @@
 // styles.css is linked from index.html so the page geometry is applied
 // before this module runs: the first measurement must not happen unstyled.
-import type { Doc, MarginKey, StyleId } from './model';
+import type { BlockAlign, Doc, MarginKey, StyleId } from './model';
 import {
   MARGINS,
   STYLE_IDS,
@@ -27,8 +27,11 @@ import {
 } from './paginate';
 import {
   bindShortcuts,
+  clearBlockFormat,
+  currentFormat,
   currentStyle,
   inlineState,
+  setBlockFormat,
   setBlockStyle,
   toggleInline,
 } from './commands';
@@ -112,6 +115,7 @@ let vault: Vault | null = null;
 const ui = {
   style: null as ReturnType<typeof menuButton> | null,
   page: null as ReturnType<typeof menuButton> | null,
+  para: null as ReturnType<typeof menuButton> | null,
   hf: null as HTMLButtonElement | null,
   palette: null as ReturnType<typeof menuButton> | null,
   title: null as HTMLInputElement | null,
@@ -125,6 +129,34 @@ const ui = {
 
 const IS_MAC = navigator.platform.toLowerCase().includes('mac');
 const MOD = IS_MAC ? '⌘' : 'Ctrl+';
+
+/**
+ * The direct-formatting presets the menus offer.
+ *
+ * Deliberately a short list. The point is not to reproduce Word's paragraph
+ * dialog, it is to be able to say what an imported document already says,
+ * and to centre a title without leaving the keyboard.
+ */
+const ALIGNMENTS: { id: BlockAlign; label: string; key: string }[] = [
+  { id: 'left', label: 'Left', key: 'l' },
+  { id: 'center', label: 'Centre', key: 'e' },
+  { id: 'right', label: 'Right', key: 'r' },
+  { id: 'justify', label: 'Justified', key: 'j' },
+];
+
+const LINE_SPACINGS = [
+  { label: 'Single', value: 1 },
+  { label: '1.15', value: 1.15 },
+  { label: 'One and a half', value: 1.5 },
+  { label: 'Double', value: 2 },
+];
+
+/** Points, the unit the rest of the style table is in. */
+const SPACES = [
+  { label: 'None', value: 0 },
+  { label: '6 pt', value: 6 },
+  { label: '12 pt', value: 12 },
+];
 const SHIFT = IS_MAC ? '⇧' : 'Shift+';
 
 function inlineGroup(...kids: HTMLElement[]): HTMLElement {
@@ -167,7 +199,7 @@ function buildToolbar(host: HTMLElement): void {
     { separator: true },
     { label: 'Open Word document…', onSelect: () => void pickDocx() },
     { separator: true },
-    { label: 'Export…', hint: MOD + 'E', onSelect: () => showExportSheet() },
+    { label: 'Export…', hint: MOD + SHIFT + 'E', onSelect: () => showExportSheet() },
     { label: 'Save as Word (.docx)', onSelect: () => void exportWord() },
     { label: 'Print / save as PDF', hint: MOD + 'P', onSelect: () => void printDocument() },
     { separator: true },
@@ -212,6 +244,46 @@ function buildToolbar(host: HTMLElement): void {
     'tb-style'
   );
   host.appendChild(ui.style.el);
+
+  // Direct formatting: what the document asks for over and above its style.
+  ui.para = menuButton('Paragraph', 'Alignment, indents and spacing', () => {
+    const f = currentFormat();
+    const align = f.align ?? 'left';
+    const row = (label: string, on: boolean, run: () => void) => ({
+      label,
+      checked: on,
+      onSelect: run,
+    });
+    return [
+      { heading: 'Alignment' },
+      ...ALIGNMENTS.map((a) =>
+        row(a.label, align === a.id, () => setBlockFormat({ align: a.id }))
+      ),
+      { separator: true },
+      { heading: 'Line spacing' },
+      ...LINE_SPACINGS.map((l) =>
+        row(l.label, (f.lineRule ?? 'auto') === 'auto' && f.lineHeight === l.value, () =>
+          setBlockFormat({ lineHeight: l.value, lineRule: 'auto' })
+        )
+      ),
+      { separator: true },
+      { heading: 'Space before' },
+      ...SPACES.map((sp) =>
+        row(sp.label, f.spaceBefore === sp.value, () =>
+          setBlockFormat({ spaceBefore: sp.value })
+        )
+      ),
+      { heading: 'Space after' },
+      ...SPACES.map((sp) =>
+        row(sp.label, f.spaceAfter === sp.value, () =>
+          setBlockFormat({ spaceAfter: sp.value })
+        )
+      ),
+      { separator: true },
+      { label: 'Clear direct formatting', onSelect: () => clearBlockFormat() },
+    ];
+  });
+  host.appendChild(ui.para.el);
 
   ui.bold = textButton('B', `Bold (${MOD}B)`, () => toggleInline('bold'), 'tb-b');
   ui.italic = textButton('I', `Italic (${MOD}I)`, () => toggleInline('italic'), 'tb-i');
@@ -900,6 +972,35 @@ function commands(): Command[] {
     checked: inline.underline,
   });
 
+  const fmt = currentFormat();
+  for (const a of ALIGNMENTS) {
+    add('ALIGN', 'Align ' + a.label.toLowerCase(), () => setBlockFormat({ align: a.id }), {
+      hint: MOD + a.key.toUpperCase(),
+      checked: (fmt.align ?? 'left') === a.id,
+      keywords: 'paragraph alignment justify centre center',
+    });
+  }
+  for (const l of LINE_SPACINGS) {
+    add('SPACING', 'Line spacing — ' + l.label, () =>
+      setBlockFormat({ lineHeight: l.value, lineRule: 'auto' }), {
+      checked: (fmt.lineRule ?? 'auto') === 'auto' && fmt.lineHeight === l.value,
+      keywords: 'leading line height paragraph',
+    });
+  }
+  for (const sp of SPACES) {
+    add('SPACING', 'Space after — ' + sp.label, () => setBlockFormat({ spaceAfter: sp.value }), {
+      checked: fmt.spaceAfter === sp.value,
+      keywords: 'paragraph spacing below',
+    });
+    add('SPACING', 'Space before — ' + sp.label, () => setBlockFormat({ spaceBefore: sp.value }), {
+      checked: fmt.spaceBefore === sp.value,
+      keywords: 'paragraph spacing above',
+    });
+  }
+  add('SPACING', 'Clear direct formatting', () => clearBlockFormat(), {
+    keywords: 'reset alignment indent spacing to the style',
+  });
+
   add('EDIT', 'Undo', () => {
     undo();
     afterChange();
@@ -922,7 +1023,7 @@ function commands(): Command[] {
   add('FILE', 'Print / save as PDF', () => void printDocument(), { hint: MOD + 'P' });
 
   add('EXPORT', 'Export…', () => showExportSheet(), {
-    hint: MOD + 'E',
+    hint: MOD + SHIFT + 'E',
     keywords: 'save as formats sheet',
   });
   add('EXPORT', 'Save as Word (.docx)', () => void exportWord(), { keywords: 'docx' });
@@ -1133,10 +1234,22 @@ function boot(): void {
       toggleCommands();
       return;
     }
-    if (mod && !e.shiftKey && e.key.toLowerCase() === 'e') {
+    if (mod && e.shiftKey && e.key.toLowerCase() === 'e') {
       e.preventDefault();
       showExportSheet();
       return;
+    }
+    // Word's alignment shortcuts, which is why the export sheet is on
+    // Shift+E rather than E. Ctrl+R is reload in the browser and
+    // right-align in every word processor; in a document window the
+    // document wins, and F5 still reloads.
+    if (mod && !e.shiftKey) {
+      const a = ALIGNMENTS.find((x) => x.key === e.key.toLowerCase());
+      if (a) {
+        e.preventDefault();
+        setBlockFormat({ align: a.id });
+        return;
+      }
     }
     if (isCommandsOpen()) return; // the palette owns the keyboard while open
     if (e.key === 'Escape' && isFindOpen()) {
@@ -1170,6 +1283,8 @@ function boot(): void {
     setStyle: (id) => setBlockStyle(id),
     currentStyle,
     inlineState,
+    setAlign: (align) => setBlockFormat({ align }),
+    currentFormat,
     // Header editing and the palette both move the selection somewhere the
     // bar has no business formatting.
     suppressed: () => isEditingHF() || isCommandsOpen(),

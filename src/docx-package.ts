@@ -1,4 +1,5 @@
 import JSZip from 'jszip';
+import type { BlockFormat } from './model';
 
 /**
  * The preservation vault.
@@ -79,6 +80,11 @@ export interface Vault {
   /** Per "<rowId>c<index>": that cell's w:tcPr, which carries any gridSpan. */
   cellPr: Map<string, string>;
   opaque: OpaqueEntry[];
+  /**
+   * The direct formatting each paragraph arrived with, so an export can tell
+   * a paragraph nobody touched from one whose alignment actually changed.
+   */
+  blockFmt: Map<string, BlockFormat>;
   /** Body-level <w:sectPr>, which must stay last in the body. */
   sectPrXml: string | null;
   warnings: Warning[];
@@ -103,6 +109,7 @@ export function emptyVault(): Vault {
     rowPr: new Map(),
     cellPr: new Map(),
     opaque: [],
+    blockFmt: new Map(),
     sectPrXml: null,
     warnings: [],
   };

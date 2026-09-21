@@ -28,7 +28,7 @@ and a preview pane that this program has never had.
 - [Stack](#stack)
 - [The workspace](#the-workspace) — [command palette](#the-command-palette), [formatting bar](#the-formatting-bar), [export sheet](#the-export-sheet), [library](#the-library), [palettes](#palettes)
 - [Geometry](#geometry) · [How it works](#how-it-works) · [Pagination](#the-two-pagination-paths) · [Line-level splitting](#line-level-splitting) · [Styles](#styles)
-- [Opening a .docx](#opening-a-docx) — [headings](#headings-when-the-document-does-not-say), [tables](#tables), [sections](#sections), [the preservation vault](#the-preservation-vault)
+- [Opening a .docx](#opening-a-docx) — [headings](#headings-when-the-document-does-not-say), [tables](#tables), [sections](#sections), [direct formatting](#direct-paragraph-formatting), [the preservation vault](#the-preservation-vault)
 - [Fidelity harness](#fidelity-harness) · [Printing to PDF](#printing-to-pdf) · [.docx export](#docx-export) · [Storage](#storage)
 - [Format independence](#format-independence) · [Not built, on purpose](#not-built-on-purpose) · [Acceptance tests](#acceptance-tests)
 
@@ -118,7 +118,7 @@ that measures a millisecond late.
 <sub>Every format costs something different, and the sheet says so at the moment of choosing. The Word line reads differently for a document that came from a .docx and still has its original package.</sub>
 
 
-`Cmd/Ctrl+E`. A menu of file formats tells you what you can produce; it does
+`Cmd/Ctrl+Shift+E`. A menu of file formats tells you what you can produce; it does
 not tell you what each one costs, and here every format costs something
 different. The sheet says so at the moment of choosing:
 
@@ -508,6 +508,53 @@ accent, and the rail's PAGE SETUP describes the page the caret is on rather
 than the document, reading the geometry back off the page element so the
 panel cannot disagree with what is on screen.
 
+### Direct paragraph formatting
+
+The six named styles are the vocabulary this program writes in. They are not
+the vocabulary the world sends: across 63 real documents, **1,362 of 2,913
+paragraphs** carry an alignment, an indent or a paragraph spacing of their
+own, and 40 of the 63 documents have at least one.
+
+| Set directly on the paragraph | Paragraphs |
+|---|---|
+| Spacing (before / after / line rule) | 1,223 |
+| Indentation (`w:ind`) | 417 |
+| Alignment (`w:jc`, not left) | 125 |
+
+All of it was preserved on export from the beginning and none of it was
+drawn, so an imported document was faithful in the file and wrong on the
+screen - and our page breaks landed in different places than Word's on
+nearly half the paragraphs in a real corpus. `w:jc`, `w:ind` and `w:spacing`
+are now read into the model, rendered, editable and written back.
+
+Four things this has to get right:
+
+- **Spacing is padding, never margin.** Sibling margins collapse, and the
+  paginator sums block heights against a fixed content box; a collapsed
+  margin makes that sum disagree with the container and pages overflow. So
+  space-before and space-after are added to the style's own padding.
+- **An indent replaces the style's hanging indent rather than adding to it**,
+  or an imported bullet ends up indented twice. Word's `w:ind left` plus
+  `w:hanging` composes exactly as CSS `padding-left` plus a negative
+  `text-indent`, so the pair maps across unchanged.
+- **`w:lineRule="auto"` counts single lines, not font sizes.** Word derives a
+  single line from the font's ascent, descent and line gap - about 1.2× the
+  point size for a text face - where CSS `line-height: 1.5` means 1.5× the
+  font size, a fifth tighter. The factor is applied when drawing; the model
+  goes on storing Word's own number, so the round trip stays exact.
+- **A rewritten `w:pPr` keeps the schema order.** Word offers to repair a
+  file whose paragraph properties are out of sequence, so `w:spacing`,
+  `w:ind` and `w:jc` are inserted at their CT_PPr positions by a depth-aware
+  scan of the existing children - a flat regex would find the `w:jc` inside
+  a trailing `w:sectPr` and write the section's alignment onto the paragraph.
+
+Only a paragraph whose formatting actually changed is rewritten; everything
+else still exports byte-identically. Alignment is on the formatting bar and
+on Word's own `Ctrl+L`/`E`/`R`/`J`, which is why the export sheet moved to
+`Ctrl+Shift+E`. Indents, spacing and line spacing are in the rail's
+**Paragraph** menu and in the command palette, along with *Clear direct
+formatting*, which takes a paragraph back to its named style.
+
 ### The preservation vault
 
 The original package is kept in memory. On export only the body of
@@ -531,10 +578,11 @@ still line up with the edited blocks restored from localStorage.
 
 ### Preserved but not rendered
 
-Tables, content controls, tracked changes, images and anything else
-unrecognized are kept as verbatim XML, anchored to the paragraph they followed,
-and written back on export. They are not rendered or editable, and a banner
-says what was hidden - silent data loss is the thing to avoid.
+Content controls, tracked changes and anything else unrecognized are kept as
+verbatim XML, anchored to the paragraph they followed, and written back on
+export. They are not rendered or editable, and a banner says what was hidden -
+silent data loss is the thing to avoid. Tables, images and direct paragraph
+formatting were all once on this list and are now drawn and editable.
 
 Two honest limits:
 
@@ -685,6 +733,12 @@ problem Markdown and .docx do not already solve here.
   and edited; one that arrives on the clipboard is not.
 - **A continuous section break.** It shares a page with the section before
   it, and a page has one geometry, so it folds into that section instead.
+- **Direct character formatting.** Paragraphs can be aligned, indented and
+  spaced, but there is still no font family, size or colour control: a run is
+  bold, italic, underlined, or it is whatever its named style says. Imported
+  run formatting is preserved on export and shown as the style renders it.
+- **Creating** a table or inserting an image. Both are read, drawn and edited
+  when they arrive in a .docx; neither can be made from nothing.
 - Columns, text boxes, footnotes, PDF import, collaboration, spell check
   beyond the browser's own, mobile layout, any backend.
 

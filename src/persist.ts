@@ -1,5 +1,6 @@
 import type {
   Block,
+  BlockFormat,
   Doc,
   HeaderFooterSet,
   MarginKey,
@@ -8,7 +9,7 @@ import type {
   Section,
   TableBlock,
 } from './model';
-import { MARGINS, isStyleId, newId, pageSetup } from './model';
+import { MARGINS, isStyleId, newId, pageSetup, tidyFormat } from './model';
 
 const INDEX_KEY = 'wp:docs';
 const LAST_KEY = 'wp:last';
@@ -152,6 +153,7 @@ function coerce(raw: unknown): Doc {
     if (!isStyleId(rb.styleId)) {
       throw new Error(`Block ${i} has unknown styleId ${String(rb.styleId)}`);
     }
+    const fmt = coerceFormat(rb.fmt);
     return {
       id: typeof rb.id === 'string' && rb.id ? rb.id : newId(),
       styleId: rb.styleId,
@@ -162,6 +164,7 @@ function coerce(raw: unknown): Doc {
       ...(typeof rb.listLevel === 'number' && rb.listLevel > 0
         ? { listLevel: rb.listLevel }
         : {}),
+      ...(fmt ? { fmt } : {}),
     };
   });
 
@@ -225,11 +228,42 @@ function coerceExtras(o: Record<string, unknown>): Partial<Doc> {
   return out;
 }
 
+/**
+ * A stored block format, validated field by field.
+ *
+ * This same path reads a .json file off disk, so nothing here is trusted:
+ * a bad number would reach the CSS and a bad align string would reach the
+ * exporter, which writes it into a w:jc that Word then refuses.
+ */
+function coerceFormat(raw: unknown): BlockFormat | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const r = raw as Record<string, unknown>;
+  const num = (v: unknown): number | undefined =>
+    typeof v === 'number' && Number.isFinite(v) ? v : undefined;
+  const aligns = ['left', 'center', 'right', 'justify'];
+  const rules = ['auto', 'exact', 'atLeast'];
+  return tidyFormat({
+    align: typeof r.align === 'string' && aligns.includes(r.align)
+      ? (r.align as BlockFormat['align'])
+      : undefined,
+    indentLeft: num(r.indentLeft),
+    indentRight: num(r.indentRight),
+    firstLine: num(r.firstLine),
+    spaceBefore: num(r.spaceBefore),
+    spaceAfter: num(r.spaceAfter),
+    lineHeight: num(r.lineHeight),
+    lineRule: typeof r.lineRule === 'string' && rules.includes(r.lineRule)
+      ? (r.lineRule as BlockFormat['lineRule'])
+      : undefined,
+  });
+}
+
 function coerceParagraph(raw: unknown, where: string): ParagraphBlock {
   const rb = (raw ?? {}) as Record<string, unknown>;
   if (!isStyleId(rb.styleId)) {
     throw new Error(`${where} has unknown styleId ${String(rb.styleId)}`);
   }
+  const fmt = coerceFormat(rb.fmt);
   return {
     id: typeof rb.id === 'string' && rb.id ? rb.id : newId(),
     styleId: rb.styleId,
@@ -238,6 +272,7 @@ function coerceParagraph(raw: unknown, where: string): ParagraphBlock {
     ...(typeof rb.listLevel === 'number' && rb.listLevel > 0
       ? { listLevel: rb.listLevel }
       : {}),
+    ...(fmt ? { fmt } : {}),
   };
 }
 

@@ -1,5 +1,5 @@
-import type { StyleId } from './model';
-import { STYLE_IDS } from './model';
+import type { BlockFormat, StyleId } from './model';
+import { STYLE_IDS, hasFormat } from './model';
 
 /**
  * Named styles, defined once here and emitted as `.s-<StyleId>` CSS classes at
@@ -322,6 +322,83 @@ const SPLIT_CSS =
   '.blk.split-more { padding-bottom: 0; border-bottom: none; }\n';
 
 /** Inject the `.s-*` rules. Called once at startup, before first measurement. */
+/**
+ * What Word means by one line.
+ *
+ * `w:lineRule="auto"` counts in multiples of a single line, and Word derives
+ * a single line from the font's own ascent, descent and line gap - about
+ * 1.2 times the point size for a text face. CSS `line-height: 1.5` means 1.5
+ * times the FONT SIZE, which is a fifth tighter than the same document in
+ * Word. Applying the factor here keeps a document that says "1.5 lines"
+ * looking like itself, while the model goes on storing Word's own number so
+ * the round trip stays exact.
+ */
+export const WORD_SINGLE_LINE = 1.2;
+
+/**
+ * Draw a paragraph's direct formatting on top of its named style.
+ *
+ * Written as inline styles rather than extra classes because the values are
+ * per paragraph and continuous. Two rules it must not break:
+ *
+ * - Spacing is PADDING, never margin. Sibling margins collapse, and the
+ *   paginator sums block heights against a fixed content box; a collapsed
+ *   margin makes that sum disagree with the container and pages overflow.
+ * - An indent from the document REPLACES the style's own hanging indent
+ *   rather than adding to it, or an imported bullet ends up indented twice.
+ */
+export function applyBlockFormat(
+  el: HTMLElement,
+  id: StyleId,
+  f: BlockFormat | undefined
+): void {
+  const st = el.style;
+  for (const prop of [
+    'text-align',
+    'padding-top',
+    'padding-bottom',
+    'padding-left',
+    'padding-right',
+    'text-indent',
+    'line-height',
+  ]) {
+    st.removeProperty(prop);
+  }
+  if (!hasFormat(f)) {
+    delete el.dataset.fmt;
+    return;
+  }
+  // Kept on the element so readModel can give it back without consulting
+  // the model, which is not the source of truth while editing.
+  el.dataset.fmt = JSON.stringify(f);
+
+  const d = STYLES[id];
+  const [padT, padR, padB, padL] = d.padding;
+
+  if (f.align) st.textAlign = f.align;
+  if (f.spaceBefore !== undefined) st.paddingTop = px(padT + f.spaceBefore) + 'px';
+  if (f.spaceAfter !== undefined) st.paddingBottom = px(padB + f.spaceAfter) + 'px';
+
+  const indented =
+    f.indentLeft !== undefined || f.firstLine !== undefined || f.indentRight !== undefined;
+  if (indented) {
+    const left = f.indentLeft ?? padL;
+    const first = f.firstLine ?? 0;
+    // A hanging indent is a negative first line against a padded box, which
+    // is exactly how Word's w:ind left + w:hanging compose.
+    st.paddingLeft = px(left + Math.max(0, -first)) + 'px';
+    st.textIndent = px(first) + 'px';
+    if (f.indentRight !== undefined) st.paddingRight = px(padR + f.indentRight) + 'px';
+  }
+
+  if (f.lineHeight !== undefined) {
+    st.lineHeight =
+      f.lineRule === 'exact' || f.lineRule === 'atLeast'
+        ? px(f.lineHeight) + 'px'
+        : String(f.lineHeight * WORD_SINGLE_LINE);
+  }
+}
+
 export function injectStyleSheet(): void {
   const id = 'wp-named-styles';
   if (document.getElementById(id)) return;

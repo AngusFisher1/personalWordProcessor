@@ -11,8 +11,8 @@ import {
   UnderlineType,
 } from 'docx';
 import type { IParagraphStyleOptions, ParagraphChild } from 'docx';
-import type { Block, Doc, Margins, ParagraphBlock, StyleId } from './model';
-import { STYLE_IDS, isTable } from './model';
+import type { Block, BlockAlign, BlockFormat, Doc, Margins, ParagraphBlock, StyleId } from './model';
+import { STYLE_IDS, hasFormat, isTable } from './model';
 import { DOCX_FONT, INK, RULE_COLOR, STYLES } from './styles';
 import type { Vault } from './docx-package';
 import { repack } from './docx-package';
@@ -150,12 +150,69 @@ function runsFrom(html: string): ParagraphChild[] {
   return out;
 }
 
+const ALIGNMENT: Record<BlockAlign, (typeof AlignmentType)[keyof typeof AlignmentType]> = {
+  left: AlignmentType.LEFT,
+  center: AlignmentType.CENTER,
+  right: AlignmentType.RIGHT,
+  justify: AlignmentType.JUSTIFIED,
+};
+
+/**
+ * Direct formatting, for the path that builds a package from nothing.
+ *
+ * An imported document never comes through here - it exports through the
+ * vault, which writes the same values back into its own w:pPr - but a
+ * document written in this program can be aligned and spaced too, and
+ * dropping that on the way out would lose work.
+ */
+function directFormat(f: BlockFormat | undefined) {
+  if (!hasFormat(f)) return {};
+  const hasInd =
+    f.indentLeft !== undefined || f.indentRight !== undefined || f.firstLine !== undefined;
+  const hasSpacing =
+    f.spaceBefore !== undefined || f.spaceAfter !== undefined || f.lineHeight !== undefined;
+  return {
+    ...(f.align ? { alignment: ALIGNMENT[f.align] } : {}),
+    ...(hasInd
+      ? {
+          indent: {
+            ...(f.indentLeft !== undefined ? { left: ptTwip(f.indentLeft) } : {}),
+            ...(f.indentRight !== undefined ? { right: ptTwip(f.indentRight) } : {}),
+            ...(f.firstLine !== undefined && f.firstLine < 0
+              ? { hanging: ptTwip(-f.firstLine) }
+              : f.firstLine !== undefined && f.firstLine > 0
+                ? { firstLine: ptTwip(f.firstLine) }
+                : {}),
+          },
+        }
+      : {}),
+    ...(hasSpacing
+      ? {
+          spacing: {
+            ...(f.spaceBefore !== undefined ? { before: ptTwip(f.spaceBefore) } : {}),
+            ...(f.spaceAfter !== undefined ? { after: ptTwip(f.spaceAfter) } : {}),
+            ...(f.lineHeight !== undefined
+              ? {
+                  line:
+                    f.lineRule === 'exact' || f.lineRule === 'atLeast'
+                      ? ptTwip(f.lineHeight)
+                      : Math.round(f.lineHeight * 240),
+                  lineRule: f.lineRule ?? 'auto',
+                }
+              : {}),
+          },
+        }
+      : {}),
+  };
+}
+
 function toParagraph(b: ParagraphBlock): Paragraph {
   const isBullet = STYLES[b.styleId].bullet;
   return new Paragraph({
     style: b.styleId,
     children: runsFrom(b.html),
     ...(isBullet ? { numbering: { reference: BULLET_REF, level: 0 } } : {}),
+    ...directFormat(b.fmt),
   });
 }
 

@@ -1,9 +1,10 @@
-import type { StyleId } from './model';
-import { newId } from './model';
+import type { BlockFormat, StyleId } from './model';
+import { newId, tidyFormat } from './model';
 import { STYLES, styleClass, styleOf } from './styles';
 import {
   applyStyle,
   docEl,
+  formatOf,
   isContinuation,
   logicalHeads,
   logicalIdOf,
@@ -11,6 +12,7 @@ import {
   pieceBase,
   pageContent,
   piecesOf,
+  setFormatOf,
 } from './render';
 import {
   blockTextLength,
@@ -151,6 +153,71 @@ export function setBlockStyle(styleId: StyleId): void {
   }
   snapshot('structural');
   notifyChanged();
+}
+
+/* ------------------------------------------------------------------ *
+ * Direct paragraph formatting
+ *
+ * Applied to every piece of every selected paragraph, the same way a style
+ * change is: a paragraph split across a page boundary is several elements,
+ * and formatting only the one under the caret would align half of it.
+ * ------------------------------------------------------------------ */
+
+export function setBlockFormat(change: Partial<BlockFormat>): void {
+  flushTyping();
+  const targets = selectedBlocks();
+  if (targets.length === 0) return;
+  const caret = getCaret();
+  for (const el of targets) {
+    const next = tidyFormat({ ...(formatOf(el) ?? {}), ...change });
+    for (const piece of piecesOf(logicalIdOf(el))) setFormatOf(piece, next);
+  }
+  paginate(); // spacing and indents change heights above the caret
+  if (caret) {
+    docEl().focus();
+    placeCaret(caret);
+  }
+  snapshot('structural');
+  notifyChanged();
+}
+
+/** Strip every direct override, leaving the named style alone. */
+export function clearBlockFormat(): void {
+  flushTyping();
+  const targets = selectedBlocks();
+  if (targets.length === 0) return;
+  const caret = getCaret();
+  for (const el of targets) {
+    for (const piece of piecesOf(logicalIdOf(el))) setFormatOf(piece, undefined);
+  }
+  paginate();
+  if (caret) {
+    docEl().focus();
+    placeCaret(caret);
+  }
+  snapshot('structural');
+  notifyChanged();
+}
+
+/**
+ * The formatting the selection shares, for ticking the menus.
+ *
+ * A field the selected paragraphs disagree on comes back undefined, which
+ * is the honest answer: "mixed" is not a value anything can be set to.
+ */
+export function currentFormat(): BlockFormat {
+  const blocks = selectedBlocks();
+  if (blocks.length === 0) return {};
+  const first = formatOf(blocks[0]) ?? {};
+  if (blocks.length === 1) return first;
+  const out: BlockFormat = { ...first };
+  for (const el of blocks.slice(1)) {
+    const f = formatOf(el) ?? {};
+    for (const k of Object.keys(out) as (keyof BlockFormat)[]) {
+      if (f[k] !== out[k]) delete out[k];
+    }
+  }
+  return out;
 }
 
 export function currentStyle(): StyleId | null {

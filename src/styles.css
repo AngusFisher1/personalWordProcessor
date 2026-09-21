@@ -914,6 +914,24 @@ body.col-resizing { user-select: none; }
   border-top: 3px solid currentColor;
   opacity: 0.6;
 }
+/* Alignment, drawn rather than lettered: three bars laid out the way the
+   paragraph would be. */
+.fb-align {
+  flex-direction: column;
+  justify-content: center;
+  gap: 2.5px;
+  width: 26px;
+  padding: 0 5px;
+}
+.fb-align i {
+  display: block;
+  height: 1.5px;
+  background: currentColor;
+  opacity: 0.85;
+}
+.fb-align-center i { margin: 0 auto; }
+.fb-align-right i { margin-left: auto; }
+
 .fb-b { font-weight: 700; }
 .fb-i { font-style: italic; }
 .fb-u { text-decoration: underline; }

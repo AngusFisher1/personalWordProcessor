@@ -201,9 +201,15 @@ function keyFor(el: HTMLElement): string {
     (el.classList.contains('split-more') ? 'm' : '');
   // Keyed on the width the block is actually laid out at, which is its
   // section's, not the document's: two sections with different margins wrap
-  // the same sentence at different points.
+  // the same sentence at different points. The inline style is in the key
+  // too, because direct formatting - an indent, a paragraph spacing - changes
+  // the height of text that is otherwise identical.
   return (
-    contentWidth(setupOfBlock(el)) + '|' + styleOf(el) + '|' + split + '|' + el.innerHTML
+    contentWidth(setupOfBlock(el)) +
+    '|' + styleOf(el) +
+    '|' + split +
+    '|' + (el.dataset.fmt ?? '') +
+    '|' + el.innerHTML
   );
 }
 

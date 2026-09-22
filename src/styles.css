@@ -29,8 +29,20 @@
   --ui: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
 
-  --rail-w: 248px;
+  --rail-w: 260px;
+  --inspector-w: 300px;
   --spine-w: 44px;
+  --status-h: 26px;
+
+  /* The spacing scale. Everything this redesign touches uses one of these
+     six numbers; there was no scale before and 266 hand-picked pixel
+     values instead. */
+  --s1: 4px;
+  --s2: 8px;
+  --s3: 12px;
+  --s4: 16px;
+  --s5: 24px;
+  --s6: 32px;
 }
 
 * { box-sizing: border-box; }
@@ -45,9 +57,17 @@ html, body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* The window is the four zones stacked: the three panels in a row, and the
+   status bar underneath spanning all of them. */
+body {
+  display: flex;
+  flex-direction: column;
+}
+
 #app {
   display: flex;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
   background: var(--bg);
 }
 
@@ -567,18 +587,54 @@ body.col-resizing { user-select: none; }
 
 /* ---------- status readout ---------- */
 
-.readout {
-  position: absolute;
-  left: 22px;
-  bottom: 18px;
+/* ---------- status bar ----------
+   One line, the width of the window, and the ONLY place a page count or a
+   word count appears. Every other copy was removed: two numbers that can
+   disagree are worse than one number you have to look for. */
+#statusbar {
+  flex: none;
+  height: var(--status-h);
+  display: flex;
+  align-items: center;
+  gap: var(--s3);
+  padding: 0 var(--s3);
+  border-top: 1px solid var(--line);
+  background: var(--rail);
   font-family: var(--mono);
   font-size: 9px;
-  letter-spacing: 0.15em;
+  letter-spacing: 0.14em;
   color: var(--dim);
-  pointer-events: none;
   white-space: nowrap;
+  overflow: hidden;
 }
-.readout b { color: var(--mid); font-weight: 400; }
+#statusbar b { color: var(--mid); font-weight: 400; }
+.status-left { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.status-right { display: flex; align-items: center; gap: var(--s3); }
+.status-btn {
+  border: 0;
+  padding: 2px var(--s2);
+  border-radius: 2px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  cursor: pointer;
+}
+.status-btn:hover { background: var(--panel); color: var(--mid); }
+
+/* ---------- the inspector ----------
+   Zero width when closed, so the canvas re-centres the page in the space
+   that is actually left rather than sliding it under a panel. */
+#inspector {
+  flex: none;
+  width: var(--inspector-w);
+  border-left: 1px solid var(--line);
+  background: var(--rail);
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+#inspector[hidden] { display: none; }
 
 /* ---------- controls, in the rail ----------
    Each control needs to read as a control while resting. Left to inherit the
@@ -1174,7 +1230,7 @@ body.is-mobile .outline-row { min-height: 40px; }
 
 @media print {
   html, body { overflow: visible; background: #fff; height: auto; }
-  #rail, #measure, #banner, .menu, .gutter, .spine, .readout,
+  #rail, #measure, #banner, .menu, .gutter, .spine, #statusbar, #inspector,
   .cmd-scrim, .formatbar, .xs-scrim,
   .drawer-toggle, .drawer-scrim { display: none; }
   #app, #canvas, #doc {

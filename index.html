@@ -13,14 +13,18 @@
     <link rel="stylesheet" href="/src/styles.css" />
   </head>
   <body>
+    <!-- Four zones, each with one job: navigation, the page, document
+         settings, and one line of state. Nothing has two homes. -->
     <div id="app">
       <div id="rail" contenteditable="false"></div>
       <div id="canvas">
         <div id="banner" hidden></div>
         <div id="doc" contenteditable="true" spellcheck="true"></div>
       </div>
-      <div id="measure" class="page-content" aria-hidden="true"></div>
+      <aside id="inspector" contenteditable="false" aria-label="Document settings" hidden></aside>
     </div>
+    <div id="statusbar" role="status" aria-live="polite"></div>
+    <div id="measure" class="page-content" aria-hidden="true"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

@@ -750,21 +750,22 @@ function updateToolbar(): void {
  * The rail, gutter, spine and readout all describe where the caret is, so
  * they are refreshed together whenever anything moves.
  */
+/** One phrase, used by the nav panel and the status bar alike. */
+function savedLabel(): string {
+  return saveState === 'failed'
+    ? 'Not saved — storage full'
+    : saveState === 'pending'
+      ? 'Saving…'
+      : 'Saved';
+}
+
 function refreshChrome(): void {
   const page = currentPageIndex();
+  const words = lastWords < 0 ? 0 : lastWords;
   updateGutter(page);
   updateSpine(page);
-  updateReadout(caretReadout(lastWords < 0 ? 0 : lastWords));
-  updateRail(
-    doc,
-    lastWords < 0 ? 0 : lastWords,
-    saveState === 'failed'
-      ? 'NOT SAVED — STORAGE FULL'
-      : saveState === 'pending'
-        ? 'SAVING'
-        : 'SAVED',
-    saveState === 'failed'
-  );
+  updateReadout(caretReadout(words, savedLabel(), saveState === 'failed'));
+  updateRail(doc, words, savedLabel(), saveState === 'failed');
   scheduleOutline();
 }
 

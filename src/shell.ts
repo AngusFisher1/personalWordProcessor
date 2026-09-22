@@ -3,7 +3,7 @@ import type { PageSetup } from './model';
 import { contentHeight, contentWidth, isTable, plainText, sectionsOf } from './model';
 import { docEl, pages } from './render';
 import { styleOf } from './styles';
-import { currentPageSetup, pageCount } from './paginate';
+import { currentPageSetup } from './paginate';
 import type { IndexEntry } from './persist';
 import { MATCH_CAP, searchLibrary } from './persist';
 import { openMenuAt } from './ui';
@@ -225,10 +225,12 @@ function renderFiles(): void {
       el(
         'div',
         'file-meta',
+        // When it is a text search the match count earns its place; the
+        // rest of the time the row is a name and when you last touched it.
         hit && hit.count > 0
           ? `${hit.count >= MATCH_CAP ? MATCH_CAP + '+' : hit.count} ` +
-            `MATCH${hit.count === 1 ? '' : 'ES'} · ${e.pages} PP · ${ago(e.updatedAt)}`
-          : `${e.pages} PP · ${e.words} W · ${ago(e.updatedAt)}`
+            `MATCH${hit.count === 1 ? '' : 'ES'} · ${ago(e.updatedAt)}`
+          : ago(e.updatedAt)
       )
     );
     // The line the phrase is on, so you can tell which document this is
@@ -358,19 +360,13 @@ export function updateRail(
 ): void {
   lastRail = [doc, words, saved, failed];
   if (ui.title) ui.title.textContent = doc.title || 'Untitled';
-  const n = pageCount();
   if (ui.meta) {
-    // The meta line already reports the save state, so there is no separate
-    // label for it; failure turns this line itself into the warning.
+    // Save state and nothing else. The page and word counts moved to the
+    // status bar, which is now the only place either of them appears.
     ui.meta.classList.toggle('err', failed || !!flash?.err);
-    ui.meta.textContent = (
-      flash ? flash.text : `${n} PP · ${words} W · ${saved}`
-    ).toUpperCase();
+    ui.meta.textContent = (flash ? flash.text : saved).toUpperCase();
   }
 
-  // The page the caret is on, not the document: a document with two
-  // sections has two page setups, and the panel should describe the one
-  // being looked at.
   const here = pages()[currentPageIndex()];
   const setup = geometryOf(here) ?? currentPageSetup();
   const sectionCount = sectionsOf(doc).length;
@@ -679,25 +675,78 @@ export interface Readout {
   line: number;
   col: number;
   words: number;
+  /** "Letter · 0.5 in margins", for the right-hand summary. */
+  setup: string;
+  /** "Saved", "Saving…", "Unsaved changes". */
+  saved: string;
+  savedFailed?: boolean;
 }
 
+/** Opens the inspector at Page setup; set by main.ts. */
+let onPageSetup: (() => void) | null = null;
+
+export function setStatusHooks(pageSetup: () => void): void {
+  onPageSetup = pageSetup;
+}
+
+/**
+ * The status bar: one line, the width of the window.
+ *
+ * The only place a page count or a word count appears. They used to be here
+ * AND in the rail's metadata line AND on every row of the file list, three
+ * copies computed three ways, which is three chances to disagree.
+ */
 export function updateReadout(r: Readout): void {
   let n = ui.readout;
   if (!n || !n.isConnected) {
-    n = el('div', 'readout');
-    n.id = 'readout';
-    canvasEl().appendChild(n);
+    n = document.getElementById('statusbar');
+    if (!n) return;
     ui.readout = n;
   }
+  n.textContent = '';
+
   const strong = (v: string | number) => `<b>${v}</b>`;
-  n.innerHTML =
-    `PAGE ${strong(String(r.page).padStart(2, '0'))} / ${String(r.pages).padStart(2, '0')}` +
-    ` · LN ${strong(r.line)} COL ${strong(r.col)}` +
-    ` · ${strong(r.words)} W`;
+  const left = el('div', 'status-left');
+  left.innerHTML =
+    `Page ${strong(r.page)} of ${strong(r.pages)}` +
+    ` · Ln ${strong(r.line)}, Col ${strong(r.col)}` +
+    ` · ${strong(r.words)} ${r.words === 1 ? 'word' : 'words'}`;
+  n.appendChild(left);
+
+  const right = el('div', 'status-right');
+  const setup = document.createElement('button');
+  setup.className = 'status-btn';
+  setup.type = 'button';
+  setup.textContent = r.setup;
+  setup.title = 'Page setup';
+  setup.setAttribute('aria-label', 'Page setup: ' + r.setup);
+  setup.addEventListener('mousedown', (e) => e.preventDefault());
+  setup.addEventListener('click', () => onPageSetup?.());
+  right.appendChild(setup);
+
+  const saved = el('span', 'status-saved', r.saved);
+  if (r.savedFailed) saved.classList.add('err');
+  right.appendChild(saved);
+  n.appendChild(right);
+}
+
+/** "Letter · 0.5 in margins", the compact summary in the status bar. */
+export function pageSetupSummary(): string {
+  const setup = geometryOf(pages()[currentPageIndex()]) ?? currentPageSetup();
+  const letter = setup.width === 816 && setup.height === 1056;
+  const legal = setup.width === 816 && setup.height === 1344;
+  const a4 = Math.abs(setup.width - 794) < 3;
+  const paper = letter ? 'Letter' : legal ? 'Legal' : a4 ? 'A4' : 'Custom';
+  const inches = (setup.margins.top / 96).toFixed(2).replace(/0$/, '').replace(/\.$/, '');
+  return `${paper} · ${inches} in margins`;
 }
 
 /** Which page index the caret is on, and the line/column within its block. */
-export function caretReadout(words: number): Readout {
+export function caretReadout(
+  words: number,
+  saved = '',
+  savedFailed = false
+): Readout {
   const list = pages();
   const sel = window.getSelection();
   let page = 0;
@@ -733,7 +782,16 @@ export function caretReadout(words: number): Readout {
       }
     }
   }
-  return { page: page + 1, pages: Math.max(1, list.length), line, col, words };
+  return {
+    page: page + 1,
+    pages: Math.max(1, list.length),
+    line,
+    col,
+    words,
+    setup: pageSetupSummary(),
+    saved,
+    savedFailed,
+  };
 }
 
 /** The page the caret is on, for the gutter and spine highlights. */

@@ -13,25 +13,20 @@
  * applies to the selection has to find the selection still there.
  */
 
-export interface Command {
-  id: string;
-  label: string;
-  /** Uppercase group heading, used to order and label the list. */
-  group: string;
-  /** Right-aligned shortcut or note. */
-  hint?: string;
-  /** Radio-style state: the current style, the current palette. */
-  checked?: boolean;
-  /** Extra words to match on that are not worth showing. */
-  keywords?: string;
-  run(): void;
-}
+import type { CommandDef } from './registry';
+import {
+  formatShortcut,
+  isEnabled,
+  labelOf,
+  noteUsed,
+  recentCommands,
+  visibleCommands,
+} from './registry';
 
 let host: HTMLElement | null = null;
 let input: HTMLInputElement | null = null;
 let list: HTMLElement | null = null;
-let all: Command[] = [];
-let shown: Command[] = [];
+let shown: CommandDef[] = [];
 let active = 0;
 let savedRange: Range | null = null;
 
@@ -70,13 +65,22 @@ function score(text: string, query: string): number {
   return points * 100 - text.length;
 }
 
-function filter(query: string): Command[] {
-  if (query.trim() === '') return all;
-  const scored: { c: Command; s: number }[] = [];
+function filter(query: string): CommandDef[] {
+  const all = visibleCommands();
+  if (query.trim() === '') {
+    // What you actually do, then everything else. An empty palette that
+    // opens on whatever happened to be registered first is a list you have
+    // to read; one that opens on your last eight is a list you recognise.
+    const recent = recentCommands();
+    const seen = new Set(recent.map((c) => c.id));
+    return [...recent, ...all.filter((c) => !seen.has(c.id))];
+  }
+  const scored: { c: CommandDef; s: number }[] = [];
   for (const c of all) {
+    const label = labelOf(c);
     const s = Math.max(
-      score(c.label, query),
-      score(c.group + ' ' + c.label, query) - 1,
+      score(label, query),
+      score(c.category + ' ' + label, query) - 1,
       c.keywords ? score(c.keywords, query) - 2 : -1
     );
     if (s >= 0) scored.push({ c, s });
@@ -89,32 +93,34 @@ function filter(query: string): Command[] {
  * Rendering
  * ------------------------------------------------------------------ */
 
-function row(c: Command, i: number): HTMLElement {
+function row(c: CommandDef, i: number): HTMLElement {
   const el = document.createElement('div');
-  el.className = 'cmd-row' + (i === active ? ' on' : '');
+  const off = !isEnabled(c);
+  el.className = 'cmd-row' + (i === active ? ' on' : '') + (off ? ' off' : '');
   el.dataset.index = String(i);
+  el.setAttribute('role', 'option');
+  el.setAttribute('aria-selected', String(i === active));
+  if (off) el.setAttribute('aria-disabled', 'true');
 
   const tick = document.createElement('span');
   tick.className = 'cmd-tick';
-  tick.textContent = c.checked ? '✓' : '';
+  tick.textContent = c.checked?.() ? '✓' : '';
   el.appendChild(tick);
 
   const label = document.createElement('span');
   label.className = 'cmd-label';
-  label.textContent = c.label;
+  label.textContent = labelOf(c);
   el.appendChild(label);
 
   const group = document.createElement('span');
   group.className = 'cmd-group';
-  group.textContent = c.group;
+  group.textContent = c.category;
   el.appendChild(group);
 
-  if (c.hint) {
-    const hint = document.createElement('span');
-    hint.className = 'cmd-hint';
-    hint.textContent = c.hint;
-    el.appendChild(hint);
-  }
+  const hint = document.createElement('span');
+  hint.className = 'cmd-hint';
+  hint.textContent = formatShortcut(c.shortcut);
+  el.appendChild(hint);
 
   el.addEventListener('mousedown', (e) => e.preventDefault());
   el.addEventListener('click', () => {
@@ -163,12 +169,21 @@ function restoreSelection(): void {
 
 function accept(): void {
   const chosen = shown[active];
+  if (!chosen || !isEnabled(chosen)) return;
   closeCommands();
-  if (!chosen) return;
   // The caret has to be back before the command runs: Bold applied to a
   // selection that the palette's own text field stole is applied to nothing.
   restoreSelection();
+  noteUsed(chosen.id);
   chosen.run();
+  onRan?.();
+}
+
+/** Told after a command runs, so the recent list can be persisted. */
+let onRan: (() => void) | null = null;
+
+export function setCommandsHooks(ran: () => void): void {
+  onRan = ran;
 }
 
 export function closeCommands(): void {
@@ -176,19 +191,16 @@ export function closeCommands(): void {
   host = null;
   input = null;
   list = null;
-  all = [];
   shown = [];
 }
 
-export function openCommands(commands: Command[]): void {
+export function openCommands(): void {
   if (host) {
     closeCommands();
     return; // a second press closes it, the way every palette does
   }
   const sel = window.getSelection();
   savedRange = sel && sel.rangeCount > 0 ? sel.getRangeAt(0).cloneRange() : null;
-
-  all = commands;
 
   host = document.createElement('div');
   host.className = 'cmd-scrim';

@@ -92,37 +92,44 @@ body {
   scrollbar-color: var(--line) transparent;
 }
 
+/* The header: a mark, the name, and one line of state. Nothing else is
+   allowed in this panel, which is why there is no container for it. */
 .rail-head {
-  height: 46px;
   flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0 16px;
+  padding: var(--s3) var(--s4) var(--s2);
   border-bottom: 1px solid var(--line);
 }
-.rail-mark { display: flex; align-items: center; gap: 8px; }
-.rail-dot { width: 7px; height: 7px; background: var(--acc); }
-.rail-name {
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.26em;
+.rail-title-row { display: flex; align-items: center; gap: var(--s2); }
+.rail-title {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font: 600 13px var(--ui);
   color: var(--hi);
+  cursor: pointer;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rail-title:hover { color: var(--acc); }
+.rail-title-input {
+  cursor: text;
+  border-bottom: 1px solid var(--acc);
+  border-radius: 0;
+}
+.rail-title-input:focus { outline: none; }
+.rail-title-caret {
+  flex: none;
+  width: 0;
+  height: 0;
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  border-top: 3px solid var(--dim);
 }
 
-.rail-doc { padding: 14px 16px 10px; }
-.rail-title {
-  display: block;
-  width: 100%;
-  font: 500 12.5px var(--ui);
-  letter-spacing: 0.005em;
-  color: var(--hi);
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: 2px;
-  padding: 3px 6px;
-  margin: -3px -6px;
-}
 .rail-title:hover { border-color: var(--line); }
 .rail-title:focus { outline: none; border-color: var(--acc); }
 .rail-meta {
@@ -133,6 +140,24 @@ body {
   color: var(--dim);
 }
 .rail-meta.err { color: var(--acc); }
+
+/* Collapsed, the panel takes no width at all rather than sliding a narrow
+   strip in front of the canvas: the page re-centres in what is left. */
+#app.nav-collapsed #rail { display: none; }
+
+.nav-collapse {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--dim);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+}
+.nav-collapse:hover { background: var(--panel); color: var(--hi); }
 
 .rail-tabs {
   display: flex;
@@ -325,48 +350,11 @@ body {
   color: var(--hi);
 }
 
-.rail-setup {
-  flex: none;
-  margin: 0 16px;
-  padding: 14px 0 16px;
-  border-top: 1px solid var(--line);
-}
 .rail-label {
   font-family: var(--mono);
   font-size: 8.5px;
   letter-spacing: 0.16em;
   color: var(--dim);
-}
-.setup-row {
-  display: flex;
-  justify-content: space-between;
-  padding-top: 6px;
-  font-family: var(--mono);
-  font-size: 9.5px;
-  color: var(--mid);
-}
-.setup-val { color: var(--dim); }
-
-/* Sits directly under the document name, above the outline. */
-.rail-actions {
-  flex: none;
-  border-bottom: 1px solid var(--line);
-  padding: 2px 10px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-}
-
-/* ---------- canvas ---------- */
-
-#canvas {
-  position: relative;
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  background: var(--bg);
-  overflow: hidden;
 }
 
 #doc {
@@ -644,14 +632,6 @@ body.col-resizing { user-select: none; }
    around it, and carries either a caret (it opens something) or its shortcut
    (it does something). */
 
-.rail-actions {
-  flex: none;
-  border-bottom: 1px solid var(--line);
-  padding: 2px 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
 
 .tb-btn {
   height: 28px;

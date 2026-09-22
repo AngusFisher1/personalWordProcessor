@@ -1,11 +1,12 @@
 import type { Doc } from './model';
 import type { PageSetup } from './model';
-import { contentHeight, contentWidth, isTable, plainText, sectionsOf } from './model';
+import { isTable, plainText } from './model';
 import { docEl, pages } from './render';
 import { styleOf } from './styles';
 import { currentPageSetup } from './paginate';
 import type { IndexEntry } from './persist';
 import { MATCH_CAP, searchLibrary } from './persist';
+import { setUiState, uiState } from './uistate';
 import { openMenuAt } from './ui';
 
 /**
@@ -28,7 +29,6 @@ const ui = {
   title: null as HTMLElement | null,
   meta: null as HTMLElement | null,
   gutter: null as HTMLElement | null,
-  setup: null as HTMLElement | null,
 };
 
 function el(tag: string, cls?: string, text?: string): HTMLElement {
@@ -61,6 +61,11 @@ export interface RailHooks {
   onDuplicateDoc(id: string): void;
   onDeleteDoc(id: string): void;
   onExportLibrary(): void;
+  /** The File menu, opened from the document title. */
+  onTitleMenu(anchor: HTMLElement): void;
+  /** Inline rename, from a double-click or F2. */
+  onRename(next: string): void;
+  onCollapse(): void;
 }
 
 export type RailTab = 'outline' | 'files';
@@ -68,29 +73,58 @@ let activeTab: RailTab = 'outline';
 
 let hooks: RailHooks | null = null;
 
+/**
+ * The navigation panel.
+ *
+ * NAVIGATION ONLY. The title, the save state, and the two lists - nothing
+ * else, ever. This panel used to hold the formatting controls, the file
+ * browser, the theme picker and the page setup at once, and every feature
+ * added another full-width row that pushed the file list further down.
+ *
+ * The rule is enforced structurally rather than by good intentions: there
+ * is no longer a container for controls to be appended to. A new feature
+ * has to find one of the other three zones, or the command palette.
+ */
 export function buildRail(rail: HTMLElement, h: RailHooks): void {
   hooks = h;
   rail.textContent = '';
 
+  // The brand row is gone; the mark rides along with the title and gives
+  // its line back to the list underneath.
   const head = el('div', 'rail-head');
-  const mark = el('div', 'rail-mark');
-  mark.appendChild(el('span', 'rail-dot'));
-  mark.appendChild(el('span', 'rail-name', 'RECTO'));
-  head.appendChild(mark);
-  rail.appendChild(head);
+  const titleRow = el('div', 'rail-title-row');
+  titleRow.appendChild(el('span', 'rail-dot'));
 
-  const docInfo = el('div', 'rail-doc');
-  ui.title = el('div', 'rail-title', 'Untitled');
+  ui.title = el('button', 'rail-title', 'Untitled') as HTMLElement;
+  ui.title.setAttribute('type', 'button');
+  ui.title.setAttribute('aria-haspopup', 'menu');
+  ui.title.title = 'Document menu · double-click to rename';
+  ui.title.addEventListener('mousedown', (e) => e.preventDefault());
+  ui.title.addEventListener('click', () => hooks?.onTitleMenu(ui.title as HTMLElement));
+  ui.title.addEventListener('dblclick', (e) => {
+    e.preventDefault();
+    startRename();
+  });
+  titleRow.appendChild(ui.title);
+
+  const caret = el('span', 'rail-title-caret');
+  titleRow.appendChild(caret);
+
+  const collapse = document.createElement('button');
+  collapse.type = 'button';
+  collapse.className = 'nav-collapse';
+  collapse.textContent = '«';
+  collapse.setAttribute('aria-label', 'Hide the side panel');
+  collapse.title = 'Hide the side panel';
+  collapse.addEventListener('mousedown', (e) => e.preventDefault());
+  collapse.addEventListener('click', () => hooks?.onCollapse());
+  titleRow.appendChild(collapse);
+
+  head.appendChild(titleRow);
+
   ui.meta = el('div', 'rail-meta', '');
-  docInfo.append(ui.title, ui.meta);
-  rail.appendChild(docInfo);
-
-  // What you act with comes first, then what the document is, then how the
-  // page is set up. The outline sits in the middle because it is the only
-  // part that grows.
-  const actions = el('div', 'rail-actions');
-  actions.id = 'rail-actions';
-  rail.appendChild(actions);
+  head.appendChild(ui.meta);
+  rail.appendChild(head);
 
   const tabs = el('div', 'rail-tabs');
   for (const [id, label] of [
@@ -128,14 +162,61 @@ export function buildRail(rail: HTMLElement, h: RailHooks): void {
 
   rail.appendChild(ui.files);
 
-  ui.setup = el('div', 'rail-setup');
-  rail.appendChild(ui.setup);
+  setRailTab(uiState().navTab);
+}
 
-  setRailTab('outline');
+/**
+ * Rename in place.
+ *
+ * A field where the title is, rather than a dialog somewhere else: the
+ * document's name is the one thing in this panel you are allowed to change,
+ * and it should be changed where it is written.
+ */
+export function startRename(): void {
+  const title = ui.title;
+  if (!title || title.tagName === 'INPUT') return;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'rail-title rail-title-input';
+  input.value = title.textContent ?? '';
+  input.spellcheck = false;
+  input.setAttribute('aria-label', 'Document name');
+
+  const finish = (commit: boolean): void => {
+    const next = input.value.trim();
+    input.replaceWith(title);
+    if (commit && next !== '' && next !== title.textContent) hooks?.onRename(next);
+  };
+  input.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      finish(true);
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      finish(false);
+    }
+  });
+  input.addEventListener('blur', () => finish(true));
+
+  title.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+/** Move the keyboard into one of the two lists. */
+export function focusRailTab(tab: RailTab): void {
+  setRailTab(tab);
+  const first = (
+    tab === 'files'
+      ? ui.filter ?? ui.fileList?.querySelector('.file-row')
+      : ui.outline?.querySelector('.outline-row')
+  ) as HTMLElement | null;
+  first?.focus();
 }
 
 export function setRailTab(tab: RailTab): void {
   activeTab = tab;
+  setUiState({ navTab: tab });
   for (const t of Array.from(ui.tabs?.children ?? [])) {
     (t as HTMLElement).classList.toggle(
       'on',
@@ -323,13 +404,6 @@ function geometryOf(pageEl: HTMLElement | undefined): PageSetup | null {
   };
 }
 
-/** A row of key/value metadata, as used by PAGE SETUP. */
-function setupRow(label: string, value: string): HTMLElement {
-  const row = el('div', 'setup-row');
-  row.append(el('span', '', label), el('span', 'setup-val', value));
-  return row;
-}
-
 /**
  * A passing message in the meta line.
  *
@@ -367,40 +441,6 @@ export function updateRail(
     ui.meta.textContent = (flash ? flash.text : saved).toUpperCase();
   }
 
-  const here = pages()[currentPageIndex()];
-  const setup = geometryOf(here) ?? currentPageSetup();
-  const sectionCount = sectionsOf(doc).length;
-  if (ui.setup) {
-    ui.setup.textContent = '';
-    ui.setup.appendChild(el('div', 'rail-label', 'PAGE SETUP'));
-    const inches = (n2: number) => (n2 / 96).toFixed(2).replace(/\.00$/, '');
-    if (sectionCount > 1) {
-      ui.setup.appendChild(
-        setupRow(
-          'Section',
-          `${(Number(here?.dataset.section ?? 0) || 0) + 1} of ${sectionCount}`
-        )
-      );
-    }
-    ui.setup.appendChild(
-      setupRow(
-        setup.width === 816 && setup.height === 1056 ? 'US Letter' : 'Custom',
-        `${inches(setup.width)} × ${inches(setup.height)} in`
-      )
-    );
-    ui.setup.appendChild(
-      setupRow('Margins', `${(setup.margins.top / 96).toFixed(2)} in`)
-    );
-    ui.setup.appendChild(
-      setupRow('Body', `Source Serif 11/16`)
-    );
-    ui.setup.appendChild(
-      setupRow(
-        'Text box',
-        `${Math.round(contentWidth(setup))} × ${Math.round(contentHeight(setup))}`
-      )
-    );
-  }
 }
 
 /**

@@ -1,9 +1,8 @@
 // styles.css is linked from index.html so the page geometry is applied
 // before this module runs: the first measurement must not happen unstyled.
-import type { BlockAlign, Doc, MarginKey, StyleId } from './model';
+import type { Doc, MarginKey, StyleId } from './model';
 import {
   MARGINS,
-  STYLE_IDS,
   emptyDoc,
   marginPreset,
   newBlock,
@@ -14,7 +13,6 @@ import {
 } from './model';
 import type { StyleOverrides } from './styles';
 import {
-  DOC_FONT,
   STYLES,
   injectStyleSheet,
   setDocumentFont,
@@ -65,8 +63,6 @@ import { closeFind, isFindOpen, openFind, refreshFind, selectedText } from './fi
 import { bindPaste } from './paste';
 import { bindTables } from './tables';
 import {
-  canRedo,
-  canUndo,
   noteTyping,
   redo,
   resetHistory,
@@ -90,8 +86,8 @@ import type { Vault } from './docx-package';
 import { deleteOriginal, loadOriginal, saveOriginal } from './docx-package';
 import { importDocx } from './docx-import';
 import type { MenuItem } from './ui';
-import { closeMenu, iconButton, menuButton, openMenuAt, textButton } from './ui';
-import { ask } from './ask';
+import { closeMenu, openMenuAt } from './ui';
+import { ask, isAskOpen } from './ask';
 import { bindMobile, closeDrawer } from './mobile';
 import type { Version } from './versions';
 import { forgetVersions, keepVersion, listVersions, whenLabel } from './versions';
@@ -106,14 +102,33 @@ import {
   togglePageBreak,
   unlinkSelection,
 } from './insert';
-import type { Command } from './commandbar';
-import { closeCommands, isCommandsOpen, openCommands } from './commandbar';
+import {
+  closeCommands,
+  isCommandsOpen,
+  openCommands,
+  setCommandsHooks,
+} from './commandbar';
+import type { CommandActions } from './command-list';
+import { buildCommands } from './command-list';
+import {
+  command,
+  commandForEvent,
+  formatShortcut,
+  isEnabled,
+  labelOf,
+  recentIds,
+  register,
+  runCommand,
+  setPlatform,
+  setRecent,
+} from './registry';
+import { loadUiState, setUiState, uiState } from './uistate';
 import { bindFormatBar, hideFormatBar } from './formatbar';
 import { closeExportSheet, isExportSheetOpen, openExportSheet } from './exportsheet';
 import { toHtml, toMarkdown } from './export-text';
 import { fromMarkdown } from './import-md';
 import { exportLibrary, libraryFileName } from './export-library';
-import { PALETTES, applyPalette, currentPaletteId } from './theme';
+import { applyPalette, currentPaletteId } from './theme';
 import {
   activeHeadingId,
   buildRail,
@@ -123,404 +138,32 @@ import {
   updateGutter,
   updateOutline,
   setLibrary,
-  setRailTab,
   flashRail,
+  focusRailTab,
+  startRename,
   updateRail,
   updateReadout,
   updateSpine,
 } from './shell';
 
 let doc: Doc = emptyDoc();
+let vault: Vault | null = null;
 type SaveState = 'saved' | 'pending' | 'failed';
 let saveState: SaveState = 'saved';
-/** The original .docx package, when this document came from one. */
-let vault: Vault | null = null;
-
-/* ------------------------------------------------------------------ *
- * Toolbar
- * ------------------------------------------------------------------ */
-
-const ui = {
-  style: null as ReturnType<typeof menuButton> | null,
-  page: null as ReturnType<typeof menuButton> | null,
-  para: null as ReturnType<typeof menuButton> | null,
-  text: null as ReturnType<typeof menuButton> | null,
-  styles: null as ReturnType<typeof menuButton> | null,
-  insert: null as ReturnType<typeof menuButton> | null,
-  history: null as ReturnType<typeof menuButton> | null,
-  hf: null as HTMLButtonElement | null,
-  palette: null as ReturnType<typeof menuButton> | null,
-  title: null as HTMLInputElement | null,
-  bold: null as HTMLButtonElement | null,
-  italic: null as HTMLButtonElement | null,
-  underline: null as HTMLButtonElement | null,
-  undo: null as HTMLButtonElement | null,
-  redo: null as HTMLButtonElement | null,
-  counts: null as HTMLSpanElement | null,
-};
 
 const IS_MAC = navigator.platform.toLowerCase().includes('mac');
-const MOD = IS_MAC ? '⌘' : 'Ctrl+';
 
 /**
- * The direct-formatting presets the menus offer.
+ * The handful of elements that have to be reached for by name.
  *
- * Deliberately a short list. The point is not to reproduce Word's paragraph
- * dialog, it is to be able to say what an imported document already says,
- * and to centre a title without leaving the keyboard.
+ * It used to hold sixteen: every control in the rail. The rail's controls
+ * are gone, so what is left is the title, which the rename replaces in
+ * place, and the format bar, which redraws itself from the registry.
  */
-const ALIGNMENTS: { id: BlockAlign; label: string; key: string }[] = [
-  { id: 'left', label: 'Left', key: 'l' },
-  { id: 'center', label: 'Centre', key: 'e' },
-  { id: 'right', label: 'Right', key: 'r' },
-  { id: 'justify', label: 'Justified', key: 'j' },
-];
+const ui = {
+  title: null as HTMLElement | null,
+};
 
-/** Points. The sizes a document actually uses, not a continuous spinner. */
-const FONT_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 24, 36];
-
-/**
- * A short palette of ink colours.
- *
- * Named rather than a picker: a document with six arbitrary hex colours in
- * it is a document nobody can restyle later, and every one of these reads on
- * white paper in print.
- */
-const INK_COLORS: { label: string; value: string | null }[] = [
-  { label: 'Default', value: null },
-  { label: 'Black', value: '000000' },
-  { label: 'Grey', value: '595959' },
-  { label: 'Red', value: 'C00000' },
-  { label: 'Orange', value: 'B45309' },
-  { label: 'Green', value: '2E6B33' },
-  { label: 'Blue', value: '1F4E79' },
-  { label: 'Purple', value: '5B2D8E' },
-];
-
-const LINE_SPACINGS = [
-  { label: 'Single', value: 1 },
-  { label: '1.15', value: 1.15 },
-  { label: 'One and a half', value: 1.5 },
-  { label: 'Double', value: 2 },
-];
-
-/** Points, the unit the rest of the style table is in. */
-const SPACES = [
-  { label: 'None', value: 0 },
-  { label: '6 pt', value: 6 },
-  { label: '12 pt', value: 12 },
-];
-const SHIFT = IS_MAC ? '⇧' : 'Shift+';
-
-function inlineGroup(...kids: HTMLElement[]): HTMLElement {
-  const d = document.createElement('div');
-  d.className = 'tb-inline';
-  d.append(...kids);
-  return d;
-}
-
-/**
- * Controls live in the rail, never over the paper. The order is the order
- * they are reached for: what the file is, then undo, then what the text is.
- */
-function buildToolbar(host: HTMLElement): void {
-  host.textContent = '';
-
-  host.appendChild(
-    textButton(
-      'Commands',
-      `Every command, by name (${MOD}K)`,
-      () => toggleCommands(),
-      'tb-cmd',
-      MOD + 'K'
-    )
-  );
-  host.appendChild(
-    textButton('Find', `Find and replace (${MOD}F)`, () => showFind(), '', MOD + 'F')
-  );
-  ui.hf = textButton(
-    'Header & footer',
-    'Edit the header and footer (Esc to return)',
-    () => toggleHF(),
-    'tb-hf'
-  );
-  host.appendChild(ui.hf);
-
-  const file = menuButton('File', 'Documents, open, save and export', () => [
-    { label: 'New document', hint: MOD + 'N', onSelect: () => newDocument() },
-    { label: 'Browse documents', hint: MOD + 'O', onSelect: () => setRailTab('files') },
-    { separator: true },
-    { label: 'Open Word document…', onSelect: () => void pickDocx() },
-    { separator: true },
-    { label: 'Export…', hint: MOD + SHIFT + 'E', onSelect: () => showExportSheet() },
-    { label: 'Save as Word (.docx)', onSelect: () => void exportWord() },
-    { label: 'Print / save as PDF', hint: MOD + 'P', onSelect: () => void printDocument() },
-    { separator: true },
-    { label: 'Import Markdown…', onSelect: () => void pickText('md') },
-    { label: 'Import JSON…', onSelect: () => void pickText('json') },
-  ]);
-  host.appendChild(file.el);
-
-  ui.undo = iconButton('undo', `Undo (${MOD}Z)`, () => {
-    undo();
-    afterChange();
-  });
-  ui.redo = iconButton('redo', `Redo (${MOD}${SHIFT}Z)`, () => {
-    redo();
-    afterChange();
-  });
-  host.appendChild(inlineGroup(ui.undo, ui.redo));
-
-  // Each entry previews itself in its own style, so the list shows what the
-  // styles look like rather than only what they are called.
-  ui.style = menuButton(
-    'Body',
-    'Paragraph style',
-    () => {
-      const current = currentStyle();
-      return STYLE_IDS.map((id) => {
-        const d = STYLES[id];
-        return {
-          label: d.label,
-          checked: id === current,
-          preview: {
-            fontFamily: DOC_FONT,
-            fontSize: Math.min(19, Math.max(12, d.size * 1.2)) + 'px',
-            fontWeight: d.bold ? '700' : '400',
-            textTransform: d.uppercase ? 'uppercase' : 'none',
-            letterSpacing: d.letterSpacing ? d.letterSpacing + 'px' : 'normal',
-          },
-          onSelect: () => setBlockStyle(id),
-        };
-      });
-    },
-    'tb-style'
-  );
-  host.appendChild(ui.style.el);
-
-  ui.history = menuButton('History', 'Earlier saves of this document', () => {
-    if (versionCache.length === 0) {
-      return [{ heading: 'No earlier saves yet' }];
-    }
-    return [
-      { heading: versionCache.length + ' saved versions' },
-      ...versionCache.slice(0, 20).map((v) => ({
-        label: whenLabel(v.savedAt),
-        note: v.words + ' w',
-        onSelect: () => restoreVersion(v),
-      })),
-      { separator: true },
-      {
-        label: 'Forget this history',
-        onSelect: () => {
-          void forgetVersions(doc.id).then(() => {
-            versionCache = [];
-            flashRail('HISTORY CLEARED');
-          });
-        },
-      },
-    ];
-  });
-  host.appendChild(ui.history.el);
-
-  ui.insert = menuButton('Insert', 'Table, image, link and page break', () => [
-    { heading: 'Table' },
-    ...TABLE_SIZES.map((t) => ({
-      label: t.rows + ' × ' + t.cols,
-      onSelect: () => doInsertTable(t.rows, t.cols),
-    })),
-    { separator: true },
-    { label: 'Image…', onSelect: () => void doInsertImage() },
-    {
-      label: linkAtCaret() ? 'Change link…' : 'Link…',
-      hint: MOD + SHIFT + 'K',
-      onSelect: () => void doLink(),
-    },
-    {
-      label: 'Page break above',
-      checked: pageBreakHere(),
-      onSelect: () => doPageBreak(),
-    },
-  ]);
-  host.appendChild(ui.insert.el);
-
-  // The named styles themselves, per document.
-  ui.styles = menuButton('Styles', 'What the six named styles look like', () => {
-    const current = currentStyle();
-    const rows: MenuItem[] = [{ heading: 'Edit a style' }];
-    for (const id of STYLE_IDS) {
-      const d = STYLES[id];
-      const changed = JSON.stringify(d) !== JSON.stringify(shippedStyle(id));
-      rows.push({
-        label: d.label + (changed ? ' ·' : ''),
-        checked: id === current,
-        preview: {
-          fontFamily: DOC_FONT,
-          fontSize: Math.min(19, Math.max(12, d.size * 1.2)) + 'px',
-          fontWeight: d.bold ? '700' : '400',
-          textTransform: d.uppercase ? 'uppercase' : 'none',
-          letterSpacing: d.letterSpacing ? d.letterSpacing + 'px' : 'normal',
-        },
-        onSelect: () => openMenuAt(ui.styles?.el as HTMLElement, styleEditorRows(id)),
-      });
-    }
-    rows.push({ separator: true });
-    rows.push({
-      label: 'Reset every style',
-      disabled: !doc.styles,
-      onSelect: () => resetStyles(),
-    });
-    return rows;
-  });
-  host.appendChild(ui.styles.el);
-
-  // Character formatting. Disabled with no selection, because every entry
-  // applies to a range: there is nothing to size or colour without one.
-  ui.text = menuButton('Text', 'Size, font, colour and decoration', () => {
-    const r = currentRunStyle();
-    const none = !hasSelection();
-    const row = (label: string, on: boolean, run: () => void, extra = {}) => ({
-      label,
-      checked: on,
-      disabled: none,
-      onSelect: run,
-      ...extra,
-    });
-    return [
-      { heading: none ? 'Select text first' : 'Size' },
-      ...(none
-        ? []
-        : FONT_SIZES.map((v) =>
-            row(v + ' pt', r.size === v, () => setRunStyle({ size: v }))
-          )),
-      ...(none ? [] : [{ separator: true as const }, { heading: 'Colour' }]),
-      ...(none
-        ? []
-        : INK_COLORS.map((c) =>
-            row(
-              c.label,
-              (r.color ?? null) === c.value,
-              () => setRunStyle({ color: c.value }),
-              c.value ? { swatch: '#' + c.value, swatchBg: '#' + c.value } : {}
-            )
-          )),
-      ...(none ? [] : [{ separator: true as const }]),
-      ...(none
-        ? []
-        : [
-            row('Strikethrough', !!r.strike, () => setRunStyle({ strike: !r.strike })),
-            row('Superscript', r.vert === 'super', () =>
-              setRunStyle({ vert: r.vert === 'super' ? null : 'super' })
-            ),
-            row('Subscript', r.vert === 'sub', () =>
-              setRunStyle({ vert: r.vert === 'sub' ? null : 'sub' })
-            ),
-            { separator: true as const },
-            row('Clear character formatting', false, () =>
-              setRunStyle({ size: null, font: null, color: null, strike: null, vert: null })
-            ),
-          ]),
-    ];
-  });
-  host.appendChild(ui.text.el);
-
-  // Direct formatting: what the document asks for over and above its style.
-  ui.para = menuButton('Paragraph', 'Alignment, indents and spacing', () => {
-    const f = currentFormat();
-    const align = f.align ?? 'left';
-    const row = (label: string, on: boolean, run: () => void) => ({
-      label,
-      checked: on,
-      onSelect: run,
-    });
-    return [
-      { heading: 'Alignment' },
-      ...ALIGNMENTS.map((a) =>
-        row(a.label, align === a.id, () => setBlockFormat({ align: a.id }))
-      ),
-      { separator: true },
-      { heading: 'Line spacing' },
-      ...LINE_SPACINGS.map((l) =>
-        row(l.label, (f.lineRule ?? 'auto') === 'auto' && f.lineHeight === l.value, () =>
-          setBlockFormat({ lineHeight: l.value, lineRule: 'auto' })
-        )
-      ),
-      { separator: true },
-      { heading: 'Space before' },
-      ...SPACES.map((sp) =>
-        row(sp.label, f.spaceBefore === sp.value, () =>
-          setBlockFormat({ spaceBefore: sp.value })
-        )
-      ),
-      { heading: 'Space after' },
-      ...SPACES.map((sp) =>
-        row(sp.label, f.spaceAfter === sp.value, () =>
-          setBlockFormat({ spaceAfter: sp.value })
-        )
-      ),
-      { separator: true },
-      { label: 'Clear direct formatting', onSelect: () => clearBlockFormat() },
-    ];
-  });
-  host.appendChild(ui.para.el);
-
-  ui.bold = textButton('B', `Bold (${MOD}B)`, () => toggleInline('bold'), 'tb-b');
-  ui.italic = textButton('I', `Italic (${MOD}I)`, () => toggleInline('italic'), 'tb-i');
-  ui.underline = textButton(
-    'U',
-    `Underline (${MOD}U)`,
-    () => toggleInline('underline'),
-    'tb-u'
-  );
-  host.appendChild(inlineGroup(ui.bold, ui.italic, ui.underline));
-
-
-  ui.page = menuButton('Margins', 'Page margins', () => {
-    const preset = marginPreset(doc.page);
-    return [
-      { heading: 'Margins' },
-      ...(Object.keys(MARGINS) as MarginKey[]).map((key) => ({
-        label: key === 'narrow' ? 'Narrow — 0.5 in' : 'Normal — 1 in',
-        checked: preset === key,
-        onSelect: () => setMarginPreset(key),
-      })),
-    ];
-  });
-  host.appendChild(ui.page.el);
-
-  // The palettes, each swatched in its own accent.
-  ui.palette = menuButton('Palette', 'Workspace palette', () => {
-    const now = currentPaletteId();
-    const rows = [];
-    let lastDark: boolean | null = null;
-    for (const p of PALETTES) {
-      if (p.dark !== lastDark) {
-        rows.push({ heading: p.dark ? 'Dark' : 'Light' });
-        lastDark = p.dark;
-      }
-      rows.push({
-        label: p.label,
-        note: p.note,
-        swatch: p.acc,
-        swatchBg: p.bg,
-        checked: p.id === now,
-        onSelect: () => setPalette(p.id),
-      });
-    }
-    return rows;
-  });
-  host.appendChild(ui.palette.el);
-
-  host.appendChild(
-    textButton(
-      'Print',
-      `Print or save as PDF (${MOD}P)`,
-      () => void printDocument(),
-      '',
-      MOD + 'P'
-    )
-  );
-}
 
 /* ------------------------------------------------------------------ *
  * The library
@@ -572,8 +215,9 @@ function newDocument(): void {
   openDoc(blank);
   save(blank, { words: 0, pages: 1 });
   refreshLibrary();
-  ui.title?.focus();
-  ui.title?.select();
+  // A new document opens with its name selected, because naming it is the
+  // first thing you do.
+  startRename();
 }
 
 function duplicate(id: string): void {
@@ -614,20 +258,42 @@ function remove(id: string): void {
 }
 
 /** The document name, editable in place at the top of the rail. */
-function mountTitle(): void {
-  const host = document.querySelector('.rail-title');
-  if (!host) return;
-  const input = document.createElement('input');
-  input.type = 'text';
-  input.className = 'rail-title';
-  input.value = doc.title;
-  input.setAttribute('aria-label', 'Document name');
-  input.addEventListener('input', () => {
-    doc.title = input.value || 'Untitled';
-    scheduleSave();
-  });
-  host.replaceWith(input);
-  ui.title = input;
+/**
+ * The File menu, opened from the document title.
+ *
+ * Everything in it is also a command, so this is a shortcut to the palette
+ * rather than a second place actions are defined: each row runs a
+ * registered id and nothing else.
+ */
+function openFileMenu(anchor: HTMLElement): void {
+  const item = (id: string, extra: Partial<MenuItem> = {}): MenuItem => {
+    const c = command(id);
+    return {
+      label: c ? labelOf(c) : id,
+      hint: formatShortcut(c?.shortcut),
+      disabled: c ? !isEnabled(c) : true,
+      onSelect: () => void runCommand(id),
+      ...extra,
+    };
+  };
+  openMenuAt(anchor, [
+    item('file.new'),
+    item('view.files'),
+    item('file.rename'),
+    item('file.duplicate'),
+    { separator: true },
+    item('document.versions'),
+    { separator: true },
+    item('file.openWord'),
+    item('file.importMarkdown'),
+    item('file.importJson'),
+    { separator: true },
+    item('file.export'),
+    item('file.exportLibrary'),
+    item('file.print'),
+    { separator: true },
+    item('file.delete'),
+  ]);
 }
 
 /**
@@ -645,7 +311,6 @@ function toggleHF(): void {
     layout();
   }
   setEditingHF(true);
-  ui.hf?.classList.add('on');
   const first = firstHFBlock();
   if (first) {
     docEl().focus();
@@ -656,7 +321,6 @@ function toggleHF(): void {
 
 function exitHF(): void {
   setEditingHF(false);
-  ui.hf?.classList.remove('on');
   const first = blocksIn(docEl())[0];
   if (first) {
     docEl().focus();
@@ -688,8 +352,7 @@ function showFind(): void {
 }
 
 function setPalette(id: string): void {
-  const p = applyPalette(id);
-  ui.palette?.setLabel(p.label);
+  applyPalette(id);
   // Page shadows and rules changed, but nothing about the text did, so no
   // reflow is needed - only the chrome that depends on the accent.
   refreshChrome();
@@ -722,26 +385,14 @@ function syncModel(): void {
   doc.blocks = readModel(docEl());
 }
 
+/**
+ * Everything that reflects where the caret is.
+ *
+ * The rail's controls used to be refreshed here by name, one line each.
+ * The format bar redraws itself from the registry instead, so this is down
+ * to the counts and the chrome.
+ */
 function updateToolbar(): void {
-  const st = currentStyle();
-  ui.style?.setLabel(st ? STYLES[st].label : 'Mixed');
-
-  const inline = inlineState();
-  ui.bold?.classList.toggle('on', inline.bold);
-  ui.italic?.classList.toggle('on', inline.italic);
-  ui.underline?.classList.toggle('on', inline.underline);
-
-  if (ui.undo) ui.undo.disabled = !canUndo();
-  if (ui.redo) ui.redo.disabled = !canRedo();
-
-  ui.page?.setLabel(
-    marginPreset(doc.page) === 'narrow'
-      ? 'Narrow margins'
-      : marginPreset(doc.page) === 'normal'
-        ? 'Normal margins'
-        : 'Custom margins'
-  );
-
   updateCounts();
   refreshChrome();
 }
@@ -1074,7 +725,7 @@ function showExportSheet(): void {
       },
       {
         label: 'Print or save as PDF',
-        tag: MOD + 'P',
+        tag: formatShortcut('Mod+P'),
         note:
           'Exactly what is on screen. Set margins to None and turn page headers ' +
           'off in the print dialog.',
@@ -1160,14 +811,6 @@ function restoreVersion(v: Version): void {
  * difference between a viewer with an editing mode and a word processor.
  * ------------------------------------------------------------------ */
 
-const TABLE_SIZES = [
-  { rows: 2, cols: 2 },
-  { rows: 3, cols: 2 },
-  { rows: 3, cols: 3 },
-  { rows: 4, cols: 3 },
-  { rows: 5, cols: 2 },
-  { rows: 6, cols: 4 },
-];
 
 function afterInsert(message: string): void {
   closeDrawer();
@@ -1276,7 +919,7 @@ function styleOverride(id: StyleId, field: string, value: unknown): void {
   flashRail('STYLE UPDATED');
 }
 
-function resetStyles(): void {
+export function resetStyles(): void {
   syncModel();
   doc.styles = undefined;
   setStyleOverrides(undefined);
@@ -1288,7 +931,7 @@ function resetStyles(): void {
 }
 
 /** The menu for one named style. */
-function styleEditorRows(id: StyleId): MenuItem[] {
+export function styleEditorRows(id: StyleId): MenuItem[] {
   const d = STYLES[id];
   const shipped = shippedStyle(id);
   const changed = JSON.stringify(d) !== JSON.stringify(shipped);
@@ -1349,184 +992,155 @@ function styleEditorRows(id: StyleId): MenuItem[] {
 }
 
 /* ------------------------------------------------------------------ *
- * The command palette
+ * The panels
  *
- * Built fresh each time it opens, so the ticks next to the current style
- * and the current palette are the current ones. Everything the toolbar can
- * do is here; the toolbar is the shortcut, not the other way round.
+ * Both side panels are the same idea: a boolean in one place, written to
+ * localStorage, read by one function that sets a class. Everything else -
+ * the canvas re-centring, the spine getting out of the way - falls out of
+ * CSS keyed on that class.
  * ------------------------------------------------------------------ */
 
-function commands(): Command[] {
-  const out: Command[] = [];
-  const add = (
-    group: string,
-    label: string,
-    run: () => void,
-    extra: Partial<Command> = {}
-  ): void => {
-    out.push({ id: group + ':' + label, group, label, run, ...extra });
+function applyPanels(): void {
+  const app = document.getElementById('app');
+  const inspector = document.getElementById('inspector');
+  const state = uiState();
+  app?.classList.toggle('nav-collapsed', state.navCollapsed);
+  app?.classList.toggle('inspector-open', state.inspectorOpen);
+  if (inspector) inspector.hidden = !state.inspectorOpen;
+  // The panels change how wide the canvas is, and the page is centred in it.
+  scheduleReflow();
+}
+
+function toggleNav(): void {
+  setUiState({ navCollapsed: !uiState().navCollapsed });
+  applyPanels();
+}
+
+function toggleInspector(): void {
+  setUiState({ inspectorOpen: !uiState().inspectorOpen });
+  applyPanels();
+  if (uiState().inspectorOpen) renderInspector();
+}
+
+function openInspector(section: 'page' | 'headerFooter' | 'print'): void {
+  setUiState({ inspectorOpen: true, inspectorSection: section });
+  applyPanels();
+  renderInspector();
+}
+
+/** Filled in by the inspector commit; the state is already real. */
+function renderInspector(): void {
+  /* zone 4 */
+}
+
+/** Filled in by the settings commit. */
+function openSettings(): void {
+  flashRail('SETTINGS COMING');
+}
+
+/** The version list, as a menu off whatever opened it. */
+function openVersionMenu(): void {
+  const anchor = (ui.title ?? document.getElementById('rail')) as HTMLElement;
+  if (versionCache.length === 0) {
+    openMenuAt(anchor, [{ heading: 'No earlier saves yet' }]);
+    return;
+  }
+  openMenuAt(anchor, [
+    { heading: versionCache.length + ' saved versions' },
+    ...versionCache.slice(0, 20).map((v) => ({
+      label: whenLabel(v.savedAt),
+      note: v.words + ' w',
+      onSelect: () => restoreVersion(v),
+    })),
+    { separator: true },
+    {
+      label: 'Forget this history',
+      onSelect: () => {
+        void forgetVersions(doc.id).then(() => {
+          versionCache = [];
+          flashRail('HISTORY CLEARED');
+        });
+      },
+    },
+  ]);
+}
+
+/* ------------------------------------------------------------------ *
+ * The command registry, wired to this document
+ *
+ * Every action in the program is defined once, in command-list.ts, and
+ * handed the thunks below. The palette, the File menu, the format bar and
+ * the keyboard all read that one list, so an action cannot be reachable
+ * from one of them and missing from another.
+ * ------------------------------------------------------------------ */
+
+function commandActions(): CommandActions {
+  return {
+    setStyle: (id) => setBlockStyle(id),
+    currentStyleId: () => currentStyle(),
+    toggleInline: (which) => toggleInline(which),
+    inlineState,
+    setRunStyle: (change) => setRunStyle(change),
+    currentRunStyle,
+    hasSelection,
+    setBlockFormat: (f) => setBlockFormat(f),
+    currentFormat,
+    clearBlockFormat: () => clearBlockFormat(),
+
+    insertTable: (rows, cols) => doInsertTable(rows, cols),
+    insertImage: () => void doInsertImage(),
+    insertLink: () => void doLink(),
+    linkAtCaret,
+    togglePageBreak: () => doPageBreak(),
+    pageBreakHere,
+
+    undo: () => {
+      undo();
+      afterChange();
+    },
+    redo: () => {
+      redo();
+      afterChange();
+    },
+    find: () => showFind(),
+    toggleHeaderFooter: () => toggleHF(),
+    setMarginPreset: (key) => setMarginPreset(key),
+    marginPreset: () => marginPreset(doc.page),
+
+    newDocument: () => newDocument(),
+    renameDocument: () => startRename(),
+    duplicateDocument: () => duplicate(doc.id),
+    deleteDocument: () => remove(doc.id),
+    openWordFile: () => void pickDocx(),
+    importMarkdown: () => void pickText('md'),
+    importJson: () => void pickText('json'),
+    print: () => void printDocument(),
+    showExportSheet: () => showExportSheet(),
+    exportWord: () => void exportWord(),
+    exportMarkdown: () => saveText('.md', 'text/markdown', () => toMarkdown(doc)),
+    exportHtml: () => saveText('.html', 'text/html', () => toHtml(doc)),
+    exportJson: () => saveText('.json', 'application/json', () => exportJson(doc)),
+    exportLibrary: () => void exportWholeLibrary(),
+    versionHistory: () => openVersionMenu(),
+
+    toggleNav: () => toggleNav(),
+    navCollapsed: () => uiState().navCollapsed,
+    focusOutline: () => focusRailTab('outline'),
+    focusFiles: () => focusRailTab('files'),
+    toggleInspector: () => toggleInspector(),
+    inspectorOpen: () => uiState().inspectorOpen,
+    openPageSetup: () => openInspector('page'),
+
+    openPalette: () => toggleCommands(),
+    openSettings: () => openSettings(),
+    setPalette: (id) => setPalette(id),
+    currentPaletteId: () => currentPaletteId(),
   };
-
-  const style = currentStyle();
-  for (const id of STYLE_IDS) {
-    add('STYLE', STYLES[id].label, () => setBlockStyle(id), {
-      checked: id === style,
-      keywords: 'paragraph style ' + id,
-    });
-  }
-
-  const inline = inlineState();
-  add('FORMAT', 'Bold', () => toggleInline('bold'), {
-    hint: MOD + 'B',
-    checked: inline.bold,
-  });
-  add('FORMAT', 'Italic', () => toggleInline('italic'), {
-    hint: MOD + 'I',
-    checked: inline.italic,
-  });
-  add('FORMAT', 'Underline', () => toggleInline('underline'), {
-    hint: MOD + 'U',
-    checked: inline.underline,
-  });
-
-  const run = currentRunStyle();
-  if (hasSelection()) {
-    for (const v of FONT_SIZES) {
-      add('TEXT', v + ' pt', () => setRunStyle({ size: v }), {
-        checked: run.size === v,
-        keywords: 'font size point text',
-      });
-    }
-    for (const c of INK_COLORS) {
-      add('TEXT', 'Colour — ' + c.label, () => setRunStyle({ color: c.value }), {
-        checked: (run.color ?? null) === c.value,
-        keywords: 'colour color ink text',
-      });
-    }
-    add('TEXT', 'Strikethrough', () => setRunStyle({ strike: !run.strike }), {
-      checked: !!run.strike,
-    });
-    add('TEXT', 'Superscript', () =>
-      setRunStyle({ vert: run.vert === 'super' ? null : 'super' }), {
-      checked: run.vert === 'super',
-    });
-    add('TEXT', 'Subscript', () =>
-      setRunStyle({ vert: run.vert === 'sub' ? null : 'sub' }), {
-      checked: run.vert === 'sub',
-    });
-    add('TEXT', 'Clear character formatting', () =>
-      setRunStyle({ size: null, font: null, color: null, strike: null, vert: null }), {
-      keywords: 'reset size colour font',
-    });
-  }
-
-  const fmt = currentFormat();
-  for (const a of ALIGNMENTS) {
-    add('ALIGN', 'Align ' + a.label.toLowerCase(), () => setBlockFormat({ align: a.id }), {
-      hint: MOD + a.key.toUpperCase(),
-      checked: (fmt.align ?? 'left') === a.id,
-      keywords: 'paragraph alignment justify centre center',
-    });
-  }
-  for (const l of LINE_SPACINGS) {
-    add('SPACING', 'Line spacing — ' + l.label, () =>
-      setBlockFormat({ lineHeight: l.value, lineRule: 'auto' }), {
-      checked: (fmt.lineRule ?? 'auto') === 'auto' && fmt.lineHeight === l.value,
-      keywords: 'leading line height paragraph',
-    });
-  }
-  for (const sp of SPACES) {
-    add('SPACING', 'Space after — ' + sp.label, () => setBlockFormat({ spaceAfter: sp.value }), {
-      checked: fmt.spaceAfter === sp.value,
-      keywords: 'paragraph spacing below',
-    });
-    add('SPACING', 'Space before — ' + sp.label, () => setBlockFormat({ spaceBefore: sp.value }), {
-      checked: fmt.spaceBefore === sp.value,
-      keywords: 'paragraph spacing above',
-    });
-  }
-  add('SPACING', 'Clear direct formatting', () => clearBlockFormat(), {
-    keywords: 'reset alignment indent spacing to the style',
-  });
-
-  add('EDIT', 'Undo', () => {
-    undo();
-    afterChange();
-  }, { hint: MOD + 'Z' });
-  add('EDIT', 'Redo', () => {
-    redo();
-    afterChange();
-  }, { hint: MOD + SHIFT + 'Z' });
-  add('EDIT', 'Find and replace', () => showFind(), { hint: MOD + 'F' });
-  add('EDIT', 'Edit header and footer', () => toggleHF(), {
-    keywords: 'letterhead page number',
-  });
-
-  for (const t of TABLE_SIZES) {
-    add('INSERT', 'Table ' + t.rows + ' × ' + t.cols, () => doInsertTable(t.rows, t.cols), {
-      keywords: 'insert table grid rows columns',
-    });
-  }
-  add('INSERT', 'Image…', () => void doInsertImage(), { keywords: 'picture photo insert' });
-  add('INSERT', linkAtCaret() ? 'Change link…' : 'Link…', () => void doLink(), {
-    hint: MOD + SHIFT + 'K',
-    keywords: 'hyperlink url insert',
-  });
-  add('INSERT', 'Page break above', () => doPageBreak(), {
-    checked: pageBreakHere(),
-    keywords: 'insert page break',
-  });
-
-  add('FILE', 'New document', () => newDocument(), { hint: MOD + 'N' });
-  add('FILE', 'Browse documents', () => setRailTab('files'), {
-    hint: MOD + 'O',
-    keywords: 'library open recent',
-  });
-  add('FILE', 'Open Word document…', () => void pickDocx(), { keywords: 'docx import' });
-  add('FILE', 'Print / save as PDF', () => void printDocument(), { hint: MOD + 'P' });
-
-  add('EXPORT', 'Export…', () => showExportSheet(), {
-    hint: MOD + SHIFT + 'E',
-    keywords: 'save as formats sheet',
-  });
-  add('EXPORT', 'Save as Word (.docx)', () => void exportWord(), { keywords: 'docx' });
-  add('EXPORT', 'Export Markdown', () =>
-    saveText('.md', 'text/markdown', () => toMarkdown(doc))
-  );
-  add('EXPORT', 'Export HTML', () => saveText('.html', 'text/html', () => toHtml(doc)));
-  add('EXPORT', 'Export JSON', () =>
-    saveText('.json', 'application/json', () => exportJson(doc))
-  );
-  add('EXPORT', 'Export whole library…', () => void exportWholeLibrary(), {
-    keywords: 'backup everything zip archive independence',
-  });
-  add('IMPORT', 'Import Markdown…', () => void pickText('md'));
-  add('IMPORT', 'Import JSON…', () => void pickText('json'));
-
-  const preset = marginPreset(doc.page);
-  for (const key of Object.keys(MARGINS) as MarginKey[]) {
-    add(
-      'PAGE',
-      key === 'narrow' ? 'Narrow margins — 0.5 in' : 'Normal margins — 1 in',
-      () => setMarginPreset(key),
-      { checked: preset === key, keywords: 'margin page setup' }
-    );
-  }
-
-  const nowPalette = currentPaletteId();
-  for (const p of PALETTES) {
-    add('PALETTE', p.label + ' — ' + p.note, () => setPalette(p.id), {
-      checked: p.id === nowPalette,
-      keywords: (p.dark ? 'dark' : 'light') + ' theme colour color',
-    });
-  }
-
-  return out;
 }
 
 function toggleCommands(): void {
   closeMenu();
-  openCommands(commands());
+  openCommands();
 }
 
 /* ------------------------------------------------------------------ *
@@ -1544,7 +1158,7 @@ function openDoc(d: Doc): void {
   setDocumentFont(d.defaultFont);
   setStyleOverrides(d.styles as StyleOverrides | undefined);
   setPageSetup(d.page);
-  if (ui.title) ui.title.value = d.title;
+  if (ui.title) ui.title.textContent = d.title;
   lastWords = -1;
   void refreshVersions();
   setHeaderFooterSpace((i) => hfSpace(doc, hfHeights, i, sectionOfPage(pages()[i])));
@@ -1607,6 +1221,12 @@ function sampleDoc(): Doc {
 function boot(): void {
   injectStyleSheet();
   bindMobile();
+  setPlatform(IS_MAC);
+  loadUiState();
+  setRecent(uiState().recent);
+  register(buildCommands(commandActions()));
+  setCommandsHooks(() => setUiState({ recent: recentIds() }));
+  applyPanels();
   const root = docEl();
 
   applyPalette(currentPaletteId());
@@ -1624,11 +1244,15 @@ function boot(): void {
     onDuplicateDoc: (id) => duplicate(id),
     onDeleteDoc: (id) => remove(id),
     onExportLibrary: () => void exportWholeLibrary(),
+    onTitleMenu: (anchor) => openFileMenu(anchor),
+    onCollapse: () => toggleNav(),
+    onRename: (next) => {
+      doc.title = next;
+      scheduleSave();
+      refreshChrome();
+      refreshLibrary();
+    },
   });
-  mountTitle();
-  const bar = document.getElementById('rail-actions');
-  if (!bar) throw new Error('#rail-actions missing');
-  buildToolbar(bar);
 
   // Keep execCommand emitting <b>/<i>/<u> rather than styled spans.
   try {
@@ -1693,57 +1317,42 @@ function boot(): void {
   });
   window.addEventListener('resize', () => refreshChrome());
 
+  /**
+   * One keyboard handler, reading one registry.
+   *
+   * Shortcuts used to live in three places - here, in commands.ts, and in
+   * the find bar - and a binding could exist in one and be missing from
+   * the palette. Now a command carries its own chord and this is the only
+   * thing that dispatches one.
+   *
+   * commands.ts still owns Enter, Backspace, Delete, Tab and the arrows:
+   * those are editing, not commands, and they have to run inside the
+   * contenteditable rather than over it.
+   */
   window.addEventListener('keydown', (e) => {
-    // The platform's own modifier, not either one. Ctrl+K and Ctrl+E are
-    // emacs kill-line and end-of-line on a Mac, and a text field that
-    // opened a dialog instead would be maddening.
-    const mod = IS_MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey;
-    if (mod && e.key.toLowerCase() === 'k') {
-      e.preventDefault();
-      if (e.shiftKey) void doLink();
-      else toggleCommands();
-      return;
-    }
-    if (mod && e.shiftKey && e.key.toLowerCase() === 'e') {
-      e.preventDefault();
-      showExportSheet();
-      return;
-    }
-    // Word's alignment shortcuts, which is why the export sheet is on
-    // Shift+E rather than E. Ctrl+R is reload in the browser and
-    // right-align in every word processor; in a document window the
-    // document wins, and F5 still reloads.
-    if (mod && !e.shiftKey) {
-      const a = ALIGNMENTS.find((x) => x.key === e.key.toLowerCase());
-      if (a) {
+    if (e.isComposing) return;
+
+    // Escape belongs to whatever is open, before anything else looks.
+    if (e.key === 'Escape') {
+      if (isCommandsOpen()) return; // the palette closes itself
+      if (isFindOpen()) {
         e.preventDefault();
-        setBlockFormat({ align: a.id });
+        closeFind();
+        return;
+      }
+      if (isEditingHF()) {
+        e.preventDefault();
+        exitHF();
         return;
       }
     }
-    if (isCommandsOpen()) return; // the palette owns the keyboard while open
-    if (e.key === 'Escape' && isFindOpen()) {
-      e.preventDefault();
-      closeFind();
-      return;
-    }
-    if (e.key === 'Escape' && isEditingHF()) {
-      e.preventDefault();
-      exitHF();
-      return;
-    }
-    if (!(e.metaKey || e.ctrlKey)) return;
-    const k = e.key.toLowerCase();
-    if (k === 'n') {
-      e.preventDefault();
-      newDocument();
-    } else if (k === 'o') {
-      e.preventDefault();
-      setRailTab('files');
-    } else if (k === 'f') {
-      e.preventDefault();
-      showFind();
-    }
+    if (isCommandsOpen() || isAskOpen()) return; // they own the keyboard
+
+    const hit = commandForEvent(e);
+    if (!hit || !isEnabled(hit)) return;
+    e.preventDefault();
+    runCommand(hit.id);
+    setUiState({ recent: recentIds() });
   });
 
   bindFormatBar({

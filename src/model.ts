@@ -180,6 +180,8 @@ export interface BlockFormat {
   /** A multiplier when lineRule is 'auto', otherwise points. */
   lineHeight?: number;
   lineRule?: 'auto' | 'exact' | 'atLeast';
+  /** w:pageBreakBefore, on this paragraph rather than on its style. */
+  pageBreakBefore?: boolean;
 }
 
 const FORMAT_KEYS: (keyof BlockFormat)[] = [
@@ -191,6 +193,7 @@ const FORMAT_KEYS: (keyof BlockFormat)[] = [
   'spaceAfter',
   'lineHeight',
   'lineRule',
+  'pageBreakBefore',
 ];
 
 /** False for undefined and for an object that says nothing. */

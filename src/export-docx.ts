@@ -15,7 +15,7 @@ import type { Block, BlockAlign, BlockFormat, Doc, Margins, ParagraphBlock, Styl
 import { STYLE_IDS, hasFormat, isTable } from './model';
 import { DOCX_FONT, INK, RULE_COLOR, STYLES } from './styles';
 import type { Vault } from './docx-package';
-import { repack } from './docx-package';
+import { RELS_PART, relsWithAdditions, repack } from './docx-package';
 import { buildBody, buildHeaderParts, parseInline, stripTags } from './docx-body';
 
 /**
@@ -246,7 +246,13 @@ function pageMargin(m: Margins) {
  */
 export async function exportDocx(doc: Doc, vault?: Vault | null): Promise<Blob> {
   if (vault && vault.parts.size > 0) {
-    return repack(vault, buildBody(doc, vault), buildHeaderParts(doc, vault));
+    // The body is built first: it is what mints relationships for links
+    // added in the editor, so the rels part can only be written after it.
+    const body = buildBody(doc, vault);
+    const extra = buildHeaderParts(doc, vault);
+    const rels = relsWithAdditions(vault);
+    if (rels) extra.set(RELS_PART, rels);
+    return repack(vault, body, extra);
   }
   return exportFresh(doc);
 }

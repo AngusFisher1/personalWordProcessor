@@ -7,6 +7,7 @@ import {
   flowChildren,
   isContinuation,
   isTableEl,
+  formatOf,
   logicalGroups,
   logicalIdOf,
   makeBlockEl,
@@ -671,7 +672,13 @@ function assign(
 
     const opensSection =
       from === 0 && hasSections() && sectionStarts.has(logicalIdOf(g.head));
-    if (from === 0 && (def.pageBreakBefore || opensSection) && cur().length > 0) {
+    // A break the paragraph asks for itself, over and above its style's.
+    const ownBreak = from === 0 && formatOf(g.head)?.pageBreakBefore === true;
+    if (
+      from === 0 &&
+      (def.pageBreakBefore || ownBreak || opensSection) &&
+      cur().length > 0
+    ) {
       breakPage(0);
       continue;
     }

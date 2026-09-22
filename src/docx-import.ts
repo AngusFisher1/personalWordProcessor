@@ -803,6 +803,8 @@ export function readParagraphFormat(pPr: Element | null): BlockFormat | undefine
     else if (firstLine !== null) f.firstLine = twipToPt(intOf(firstLine, 0));
   }
 
+  if (onOff(kid(pPr, 'pageBreakBefore'))) f.pageBreakBefore = true;
+
   const spacing = kid(pPr, 'spacing');
   if (spacing) {
     const before = wAttr(spacing, 'before');

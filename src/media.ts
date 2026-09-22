@@ -11,6 +11,8 @@
  */
 
 const urls = new Map<string, string>();
+/** Bytes for images added in the editor, which have no package to read. */
+const added = new Map<string, Uint8Array>();
 
 const TYPES: Record<string, string> = {
   png: 'image/png',
@@ -52,7 +54,46 @@ export function mediaUrl(path: string): string | null {
   return urls.get(path) ?? null;
 }
 
+/**
+ * Add one image the user inserted.
+ *
+ * Kept beside the imported parts under the same `word/media/` prefix, so a
+ * document that came from a package and one that did not are drawn, stored
+ * and exported by exactly the same code.
+ */
+export function addMedia(path: string, bytes: Uint8Array, mime?: string): string {
+  added.set(path, bytes);
+  try {
+    const blob = new Blob([bytes as BlobPart], { type: mime ?? mimeFor(path) });
+    const old = urls.get(path);
+    if (old) URL.revokeObjectURL(old);
+    urls.set(path, URL.createObjectURL(blob));
+  } catch {
+    // No object URLs outside a browser. The bytes are what the export
+    // needs; the URL is only ever used to draw the picture on screen.
+  }
+  return path;
+}
+
+/** The extension OOXML expects for a media part of this type. */
+export function extensionFor(mime: string): string {
+  for (const [ext, type] of Object.entries(TYPES)) {
+    if (type === mime) return ext;
+  }
+  return 'png';
+}
+
 export function clearMedia(): void {
   for (const url of urls.values()) URL.revokeObjectURL(url);
   urls.clear();
+  added.clear();
+}
+
+/** The bytes of an image added in this session, if it was added here. */
+export function mediaBytes(path: string): Uint8Array | null {
+  return added.get(path) ?? null;
+}
+
+export function addedMedia(): Map<string, Uint8Array> {
+  return added;
 }

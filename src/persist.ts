@@ -293,6 +293,7 @@ function coerceFormat(raw: unknown): BlockFormat | undefined {
     lineRule: typeof r.lineRule === 'string' && rules.includes(r.lineRule)
       ? (r.lineRule as BlockFormat['lineRule'])
       : undefined,
+    pageBreakBefore: r.pageBreakBefore === true ? true : undefined,
   });
 }
 

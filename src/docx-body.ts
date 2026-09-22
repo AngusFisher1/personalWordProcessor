@@ -2,7 +2,8 @@ import type { Block, BlockFormat, Doc, ParagraphBlock, RunStyle, TableBlock } fr
 import { hasRunStyle, isTable, plainText, sameFormat, sectionsOf } from './model';
 import { isRunSpan, readRunStyle } from './runs';
 import type { RunProp, Vault } from './docx-package';
-import { addWarning } from './docx-package';
+import { addWarning, imageRelId, linkRelId } from './docx-package';
+import { mediaBytes } from './media';
 
 /**
  * Regenerate the body of word/document.xml for a document that came from a
@@ -150,6 +151,57 @@ function runXml(text: string, f: Flags, base?: RunProp[], run?: RunStyle): strin
   );
 }
 
+/** px at 96dpi to EMU, the unit every drawing is measured in. */
+const EMU = 9525;
+
+let drawingSeq = 1;
+
+/**
+ * A w:drawing for an image the editor inserted.
+ *
+ * An imported image is written back as the exact run it arrived in, because
+ * a w:drawing carries cropping, effects and positioning that cannot be
+ * rebuilt from an <img>. One we made ourselves has none of that, so the
+ * minimum inline picture is the honest thing to write.
+ *
+ * The a: and pic: namespaces are declared on the elements that use them
+ * rather than assumed on the root: whether document.xml declares them
+ * depends on what the original author's Word happened to put in the file.
+ */
+function imageRunXml(vault: Vault, path: string, w: number, h: number): string {
+  const bytes = mediaBytes(path);
+  if (!bytes) {
+    addWarning(vault, 'images', 'An image could not be written back');
+    return '';
+  }
+  vault.newParts.set(path, bytes);
+  const rid = imageRelId(vault, path);
+  const cx = Math.max(1, Math.round(w * EMU));
+  const cy = Math.max(1, Math.round(h * EMU));
+  const id = ++drawingSeq;
+  const name = path.split('/').pop() ?? 'image';
+  return (
+    '<w:r><w:drawing>' +
+    '<wp:inline xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"' +
+    ' distT="0" distB="0" distL="0" distR="0">' +
+    `<wp:extent cx="${cx}" cy="${cy}"/>` +
+    '<wp:effectExtent l="0" t="0" r="0" b="0"/>' +
+    `<wp:docPr id="${id}" name="Picture ${id}"/>` +
+    '<wp:cNvGraphicFramePr/>' +
+    '<a:graphic xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main">' +
+    '<a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
+    '<pic:pic xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">' +
+    `<pic:nvPicPr><pic:cNvPr id="${id}" name="${escAttr(name)}"/><pic:cNvPicPr/></pic:nvPicPr>` +
+    `<pic:blipFill><a:blip r:embed="${escAttr(rid)}"/>` +
+    '<a:stretch><a:fillRect/></a:stretch></pic:blipFill>' +
+    '<pic:spPr><a:xfrm><a:off x="0" y="0"/>' +
+    `<a:ext cx="${cx}" cy="${cy}"/></a:xfrm>` +
+    '<a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>' +
+    '</pic:pic></a:graphicData></a:graphic></wp:inline>' +
+    '</w:drawing></w:r>'
+  );
+}
+
 /** Walk the block's inline markup into runs. Never regex the HTML. */
 function runsXml(html: string, vault: Vault, base?: RunProp[]): string {
   const root = parseInline(html);
@@ -182,8 +234,17 @@ function runsXml(html: string, vault: Vault, base?: RunProp[]): string {
           // an <img>, so regenerating one would quietly degrade it.
           const tok = el.getAttribute('data-run');
           const kept = tok ? vault.runXml.get(tok) : undefined;
-          if (kept) out += kept;
-          else addWarning(vault, 'images', 'An image could not be written back');
+          if (kept) {
+            out += kept;
+          } else {
+            // No preserved run: an image added here, which we write from
+            // scratch along with its part and its relationship.
+            const media = el.getAttribute('data-media') ?? '';
+            const w = Number(el.getAttribute('width')) || 0;
+            const h = Number(el.getAttribute('height')) || 0;
+            out += media ? imageRunXml(vault, media, w, h) : '';
+            if (!media) addWarning(vault, 'images', 'An image could not be written back');
+          }
           break;
         }
         case 'B':
@@ -201,19 +262,19 @@ function runsXml(html: string, vault: Vault, base?: RunProp[]): string {
           // written as hyperlinks; inventing one would mean rewriting
           // document.xml.rels, and then the "untouched parts are identical"
           // guarantee no longer holds.
-          const rid = target ? vault.relByTarget.get(target) : undefined;
+          // A link the package already knows keeps its relationship; one
+          // added in the editor gets a new one appended to the rels part.
+          // Nothing already in the package changes either way.
+          const rid = target && /^(https?:|mailto:)/i.test(target)
+            ? linkRelId(vault, target)
+            : target
+              ? vault.relByTarget.get(target)
+              : undefined;
           if (rid) {
             out += '<w:hyperlink r:id="' + escAttr(rid) + '">';
             walk(el, f, target, run);
             out += '</w:hyperlink>';
           } else {
-            if (target) {
-              addWarning(
-                vault,
-                'newLinks',
-                'Links added here export as plain text'
-              );
-            }
             walk(el, f, target, run);
           }
           break;
@@ -329,6 +390,12 @@ const ptToTwip = (pt: number) => Math.round(pt * 20);
  */
 function withFormat(pPr: string, f: BlockFormat | undefined): string {
   let out = pPr || '<w:pPr></w:pPr>';
+
+  out = setPPrChild(
+    out,
+    'pageBreakBefore',
+    f?.pageBreakBefore ? '<w:pageBreakBefore/>' : null
+  );
 
   const align = f?.align;
   out = setPPrChild(

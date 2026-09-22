@@ -1019,6 +1019,40 @@ body.col-resizing { user-select: none; }
   background: var(--line);
 }
 
+
+/* ---------- one question, one answer ---------- */
+.ask-panel { width: min(460px, calc(100vw - 48px)); }
+.ask-title {
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.18em;
+  color: var(--mid);
+}
+.ask-body { padding: 14px 14px 4px; }
+.ask-input {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  font: 13px var(--ui);
+}
+.ask-input:focus { border-color: var(--acc); }
+.ask-input.bad { border-color: var(--acc); }
+.ask-error {
+  min-height: 15px;
+  padding-top: 5px;
+  font: 11px var(--ui);
+  color: var(--acc);
+}
+.ask-foot {
+  padding: 4px 14px 12px;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.14em;
+  color: var(--dim);
+}
+
 @page { size: letter; margin: 0; }
 
 @media print {

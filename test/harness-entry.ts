@@ -8,3 +8,4 @@ export type { Vault } from '../src/docx-package';
 export { toMarkdown, toHtml } from '../src/export-text';
 export { fromMarkdown } from '../src/import-md';
 export { sectionsOf, sectionIndexByBlock, plainText } from '../src/model';
+export { addMedia } from '../src/media';

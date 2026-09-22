@@ -12,7 +12,7 @@
     "build:harness": "vite build --config test/vite.harness.config.ts",
     "test:roundtrip": "npm run build:harness && node test/roundtrip.mjs",
     "test:infer": "npm run build:harness && node test/infer.test.mjs",
-    "test": "npm run build:harness && node test/infer.test.mjs && node test/table.test.mjs && node test/image.test.mjs && node test/header.test.mjs && node test/section.test.mjs && node test/format.test.mjs && node test/run.test.mjs && node test/text.test.mjs && node test/roundtrip.mjs",
+    "test": "npm run build:harness && node test/infer.test.mjs && node test/table.test.mjs && node test/image.test.mjs && node test/header.test.mjs && node test/section.test.mjs && node test/format.test.mjs && node test/run.test.mjs && node test/insert.test.mjs && node test/text.test.mjs && node test/roundtrip.mjs",
     "test:table": "npm run build:harness && node test/table.test.mjs",
     "test:image": "npm run build:harness && node test/image.test.mjs",
     "test:header": "npm run build:harness && node test/header.test.mjs",
@@ -21,7 +21,8 @@
     "screenshots": "node docs/screenshots.mjs",
     "test:format": "npm run build:harness && node test/format.test.mjs",
     "test:run": "npm run build:harness && node test/run.test.mjs",
-    "test:pagination": "node test/pagination.mjs"
+    "test:pagination": "node test/pagination.mjs",
+    "test:insert": "npm run build:harness && node test/insert.test.mjs"
   },
   "devDependencies": {
     "@xmldom/xmldom": "^0.9.12",

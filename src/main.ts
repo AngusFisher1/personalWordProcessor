@@ -9,6 +9,7 @@ import {
   newBlock,
   newId,
   uniformMargins,
+  contentWidth,
   sectionsOf,
 } from './model';
 import type { StyleOverrides } from './styles';
@@ -20,7 +21,7 @@ import {
   setStyleOverrides,
   shippedStyle,
 } from './styles';
-import { blockEl, blocksIn, docEl, pages, readModel, renderAll } from './render';
+import { blockEl, blocksIn, docEl, pages, readModel, renderAll, resolveImages } from './render';
 import {
   clearHeightCache,
   currentPageSetup,
@@ -90,6 +91,18 @@ import { deleteOriginal, loadOriginal, saveOriginal } from './docx-package';
 import { importDocx } from './docx-import';
 import type { MenuItem } from './ui';
 import { closeMenu, iconButton, menuButton, openMenuAt, textButton } from './ui';
+import { ask } from './ask';
+import {
+  imageHtml,
+  insertTableAtCaret,
+  linkAtCaret,
+  linkSelection,
+  pageBreakHere,
+  readImageFile,
+  safeLink,
+  togglePageBreak,
+  unlinkSelection,
+} from './insert';
 import type { Command } from './commandbar';
 import { closeCommands, isCommandsOpen, openCommands } from './commandbar';
 import { bindFormatBar, hideFormatBar } from './formatbar';
@@ -130,6 +143,7 @@ const ui = {
   para: null as ReturnType<typeof menuButton> | null,
   text: null as ReturnType<typeof menuButton> | null,
   styles: null as ReturnType<typeof menuButton> | null,
+  insert: null as ReturnType<typeof menuButton> | null,
   hf: null as HTMLButtonElement | null,
   palette: null as ReturnType<typeof menuButton> | null,
   title: null as HTMLInputElement | null,
@@ -279,6 +293,27 @@ function buildToolbar(host: HTMLElement): void {
     'tb-style'
   );
   host.appendChild(ui.style.el);
+
+  ui.insert = menuButton('Insert', 'Table, image, link and page break', () => [
+    { heading: 'Table' },
+    ...TABLE_SIZES.map((t) => ({
+      label: t.rows + ' × ' + t.cols,
+      onSelect: () => doInsertTable(t.rows, t.cols),
+    })),
+    { separator: true },
+    { label: 'Image…', onSelect: () => void doInsertImage() },
+    {
+      label: linkAtCaret() ? 'Change link…' : 'Link…',
+      hint: MOD + SHIFT + 'K',
+      onSelect: () => void doLink(),
+    },
+    {
+      label: 'Page break above',
+      checked: pageBreakHere(),
+      onSelect: () => doPageBreak(),
+    },
+  ]);
+  host.appendChild(ui.insert.el);
 
   // The named styles themselves, per document.
   ui.styles = menuButton('Styles', 'What the six named styles look like', () => {
@@ -1047,6 +1082,95 @@ function showExportSheet(): void {
 }
 
 /* ------------------------------------------------------------------ *
+ * Inserting
+ *
+ * Tables, images and links all arrived as things an imported .docx might
+ * contain: readable, editable, and impossible to create. That is the
+ * difference between a viewer with an editing mode and a word processor.
+ * ------------------------------------------------------------------ */
+
+const TABLE_SIZES = [
+  { rows: 2, cols: 2 },
+  { rows: 3, cols: 2 },
+  { rows: 3, cols: 3 },
+  { rows: 4, cols: 3 },
+  { rows: 5, cols: 2 },
+  { rows: 6, cols: 4 },
+];
+
+function afterInsert(message: string): void {
+  syncModel();
+  reflowNow();
+  snapshot('structural');
+  scheduleSave();
+  flashRail(message);
+}
+
+function doInsertTable(rows: number, cols: number): void {
+  if (!insertTableAtCaret(rows, cols, contentWidth(doc.page))) {
+    flashRail('PUT THE CARET IN THE DOCUMENT FIRST', true);
+    return;
+  }
+  afterInsert(rows + ' × ' + cols + ' TABLE INSERTED');
+}
+
+function doPageBreak(): void {
+  if (!togglePageBreak()) {
+    flashRail('PUT THE CARET IN THE DOCUMENT FIRST', true);
+    return;
+  }
+  afterInsert(pageBreakHere() ? 'PAGE BREAK ADDED' : 'PAGE BREAK REMOVED');
+}
+
+async function doLink(): Promise<void> {
+  const existing = linkAtCaret();
+  const answer = await ask({
+    title: existing ? 'CHANGE LINK' : 'ADD LINK',
+    placeholder: 'example.com  ·  https://…  ·  name@example.com',
+    value: existing ?? '',
+    validate: (v) =>
+      v === '' || safeLink(v) ? null : 'Not a web address or an email address',
+  });
+  if (answer === null) return;
+  if (answer === '') {
+    if (unlinkSelection()) afterInsert('LINK REMOVED');
+    return;
+  }
+  const href = safeLink(answer) as string;
+  if (!linkSelection(href)) {
+    flashRail('SELECT THE TEXT TO LINK FIRST', true);
+    return;
+  }
+  afterInsert('LINKED');
+}
+
+async function doInsertImage(): Promise<void> {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = 'image/png,image/jpeg,image/gif,image/webp';
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    if (!file) return;
+    void (async () => {
+      const img = await readImageFile(file, contentWidth(doc.page));
+      if (!img) {
+        flashRail('COULD NOT READ THAT IMAGE', true);
+        return;
+      }
+      const at = blocksIn(docEl()).find((b) => b.contains(
+        window.getSelection()?.focusNode ?? document.createElement('i')
+      ));
+      const target = at ?? blocksIn(docEl())[0];
+      if (!target) return;
+      target.insertAdjacentHTML('beforeend', imageHtml(img));
+      resolveImages(target);
+      afterInsert('IMAGE INSERTED');
+    })();
+  });
+  input.click();
+}
+
+/* ------------------------------------------------------------------ *
  * The styles editor
  *
  * Six styles are the whole vocabulary this program writes in, and they were
@@ -1264,6 +1388,21 @@ function commands(): Command[] {
   add('EDIT', 'Find and replace', () => showFind(), { hint: MOD + 'F' });
   add('EDIT', 'Edit header and footer', () => toggleHF(), {
     keywords: 'letterhead page number',
+  });
+
+  for (const t of TABLE_SIZES) {
+    add('INSERT', 'Table ' + t.rows + ' × ' + t.cols, () => doInsertTable(t.rows, t.cols), {
+      keywords: 'insert table grid rows columns',
+    });
+  }
+  add('INSERT', 'Image…', () => void doInsertImage(), { keywords: 'picture photo insert' });
+  add('INSERT', linkAtCaret() ? 'Change link…' : 'Link…', () => void doLink(), {
+    hint: MOD + SHIFT + 'K',
+    keywords: 'hyperlink url insert',
+  });
+  add('INSERT', 'Page break above', () => doPageBreak(), {
+    checked: pageBreakHere(),
+    keywords: 'insert page break',
   });
 
   add('FILE', 'New document', () => newDocument(), { hint: MOD + 'N' });
@@ -1487,7 +1626,8 @@ function boot(): void {
     const mod = IS_MAC ? e.metaKey && !e.ctrlKey : e.ctrlKey;
     if (mod && e.key.toLowerCase() === 'k') {
       e.preventDefault();
-      toggleCommands();
+      if (e.shiftKey) void doLink();
+      else toggleCommands();
       return;
     }
     if (mod && e.shiftKey && e.key.toLowerCase() === 'e') {

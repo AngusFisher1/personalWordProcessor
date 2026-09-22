@@ -85,6 +85,16 @@ export interface Vault {
    * a paragraph nobody touched from one whose alignment actually changed.
    */
   blockFmt: Map<string, BlockFormat>;
+  /**
+   * Relationships minted for links added in the editor, target to rId.
+   *
+   * Additive: document.xml.rels is rewritten with these appended and nothing
+   * removed, so every relationship the package arrived with keeps its id and
+   * every other part is still written back byte for byte.
+   */
+  newRels: Map<string, string>;
+  /** Media parts added in the editor, path to bytes. */
+  newParts: Map<string, Uint8Array>;
   /** Body-level <w:sectPr>, which must stay last in the body. */
   sectPrXml: string | null;
   warnings: Warning[];
@@ -110,6 +120,8 @@ export function emptyVault(): Vault {
     cellPr: new Map(),
     opaque: [],
     blockFmt: new Map(),
+    newRels: new Map(),
+    newParts: new Map(),
     sectPrXml: null,
     warnings: [],
   };
@@ -151,6 +163,85 @@ export function partText(parts: Map<string, Uint8Array>, name: string): string |
  * the vault; only word/document.xml is regenerated, and even that keeps its
  * original prologue so the namespace declarations are exactly as they were.
  */
+/** The next free rId in a package, so a new one cannot collide. */
+function nextRelId(relsXml: string, taken: Set<string>): string {
+  let max = 0;
+  for (const m of relsXml.matchAll(/Id="rId(\d+)"/g)) {
+    max = Math.max(max, Number(m[1]));
+  }
+  for (const id of taken) {
+    const n = Number(/^rId(\d+)$/.exec(id)?.[1] ?? 0);
+    max = Math.max(max, n);
+  }
+  return 'rId' + (max + 1);
+}
+
+/**
+ * Mint a relationship for a link the editor added.
+ *
+ * A link typed into the document used to export as plain text, because
+ * writing a real one means adding a relationship and rewriting
+ * document.xml.rels. Doing it additively keeps the guarantee that mattered:
+ * nothing already in the package changes, and only that one part differs.
+ */
+const IMAGE_REL =
+  'http://schemas.openxmlformats.org/officeDocument/2006/relationships/image';
+const HYPERLINK_REL =
+  'http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink';
+
+/** Mint a relationship for a media part added in the editor. */
+export function imageRelId(vault: Vault, path: string): string {
+  const key = 'media:' + path;
+  const existing = vault.newRels.get(key);
+  if (existing) return existing;
+  const relsXml = partText(vault.parts, RELS_PART) ?? '';
+  const taken = new Set([...vault.relByTarget.values(), ...vault.newRels.values()]);
+  const id = nextRelId(relsXml, taken);
+  vault.newRels.set(key, id);
+  return id;
+}
+
+export function linkRelId(vault: Vault, target: string): string {
+  const existing = vault.relByTarget.get(target) ?? vault.newRels.get(target);
+  if (existing) return existing;
+  const relsXml = partText(vault.parts, RELS_PART) ?? '';
+  const taken = new Set([...vault.relByTarget.values(), ...vault.newRels.values()]);
+  const id = nextRelId(relsXml, taken);
+  vault.newRels.set(target, id);
+  return id;
+}
+
+export const RELS_PART = 'word/_rels/document.xml.rels';
+
+function escapeXml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** document.xml.rels with the editor's additions appended. */
+export function relsWithAdditions(vault: Vault): string | null {
+  if (vault.newRels.size === 0 && vault.newParts.size === 0) return null;
+  const xml = partText(vault.parts, RELS_PART);
+  if (!xml) return null;
+  const added = [...vault.newRels]
+    .map(([target, id]) => {
+      if (target.startsWith('media:')) {
+        // Media targets are relative to word/, which is where the rels part
+        // lives; an absolute path here is what makes Word offer to repair.
+        const rel = target.slice('media:'.length).replace(/^word\//, '');
+        return `<Relationship Id="${escapeXml(id)}" Type="${IMAGE_REL}"` +
+          ` Target="${escapeXml(rel)}"/>`;
+      }
+      return `<Relationship Id="${escapeXml(id)}" Type="${HYPERLINK_REL}"` +
+        ` Target="${escapeXml(target)}" TargetMode="External"/>`;
+    })
+    .join('');
+  return xml.replace(/<\/Relationships>\s*$/, added + '</Relationships>');
+}
+
 export async function repack(
   vault: Vault,
   bodyInner: string,
@@ -169,6 +260,11 @@ export async function repack(
     const replaced = extra?.get(name);
     if (replaced !== undefined) zip.file(name, replaced);
     else zip.file(name, vault.parts.get(name) as Uint8Array, { binary: true });
+  }
+  // Media added in the editor. New entries only: nothing already in the
+  // package is touched, so every other part is still byte for byte.
+  for (const [name, bytes] of vault.newParts) {
+    if (!vault.parts.has(name)) zip.file(name, bytes as Uint8Array, { binary: true });
   }
   zip.file(DOC_XML, vault.docXmlPrefix + bodyInner + vault.docXmlSuffix);
   return zip.generateAsync({

@@ -43,6 +43,19 @@ function writeGeometry(style: CSSStyleDeclaration, p: PageSetup): void {
 export function setPageSetup(p: PageSetup): void {
   page = p;
   writeGeometry(document.documentElement.style, p);
+  // Every page carries its own copy of the geometry, written once when it
+  // was assigned a section. Changing the setup has to invalidate those, or
+  // the pages keep the margins they were built with and only the root
+  // variables move - which is a margin change that does nothing at all.
+  for (const el of pages()) {
+    delete (el as HTMLElement).dataset.section;
+    for (const prop of [
+      '--page-w', '--page-h', '--pad-t', '--pad-r', '--pad-b', '--pad-l',
+      '--content-w', '--content-h',
+    ]) {
+      (el as HTMLElement).style.removeProperty(prop);
+    }
+  }
   clearHeightCache();
 }
 

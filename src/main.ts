@@ -89,6 +89,7 @@ import type { MenuItem } from './ui';
 import { closeMenu, openMenuAt } from './ui';
 import { ask, isAskOpen } from './ask';
 import { bindMobile, closeDrawer } from './mobile';
+import { bindInspector, renderInspector as drawInspector } from './inspector';
 import type { Version } from './versions';
 import { forgetVersions, keepVersion, listVersions, whenLabel } from './versions';
 import {
@@ -141,6 +142,7 @@ import {
   setLibrary,
   flashRail,
   focusRailTab,
+  setStatusHooks,
   startRename,
   updateRail,
   updateReadout,
@@ -376,6 +378,7 @@ function setMarginPreset(key: MarginKey): void {
   installSections(doc);
   reflowNow();
   scheduleSave();
+  if (uiState().inspectorOpen) renderInspector();
 }
 
 /* ------------------------------------------------------------------ *
@@ -1030,9 +1033,19 @@ function openInspector(section: 'page' | 'headerFooter' | 'print'): void {
   renderInspector();
 }
 
-/** Filled in by the inspector commit; the state is already real. */
 function renderInspector(): void {
-  /* zone 4 */
+  drawInspector();
+}
+
+/** Page setup changed: re-measure and redraw everything that reads it. */
+function afterPageChange(): void {
+  setPageSetup(doc.page);
+  installSections(doc);
+  clearHeightCache();
+  reflowNow();
+  snapshot('structural');
+  scheduleSave();
+  renderInspector();
 }
 
 /** Filled in by the settings commit. */
@@ -1164,6 +1177,7 @@ function openDoc(d: Doc): void {
   lastWords = -1;
   void refreshVersions();
   setHeaderFooterSpace((i) => hfSpace(doc, hfHeights, i, sectionOfPage(pages()[i])));
+  if (uiState().inspectorOpen) renderInspector();
   installSections(doc);
   renderAll(doc, docEl());
   normalize();
@@ -1357,8 +1371,52 @@ function boot(): void {
     setUiState({ recent: recentIds() });
   });
 
+  setStatusHooks(() => openInspector('page'));
+  bindInspector({
+    doc: () => doc,
+    setPaper: (width, height) => {
+      doc.page = { ...doc.page, width, height };
+      afterPageChange();
+    },
+    setMargins: (margins) => {
+      doc.page = { ...doc.page, margins };
+      if (doc.sections) {
+        doc.sections = doc.sections.map((sct) => ({ ...sct, page: { ...sct.page, margins } }));
+      }
+      afterPageChange();
+    },
+    setMarginPreset: (key) => setMarginPreset(key),
+    setDefaultFont: (family) => {
+      if (family) doc.defaultFont = family;
+      else delete doc.defaultFont;
+      setDocumentFont(doc.defaultFont);
+      afterPageChange();
+    },
+    setBodySize: (pt) => styleOverride('Body', 'size', pt),
+    setBodyLeading: (mult) => styleOverride('Body', 'lineHeight', mult),
+    setTitlePage: (on) => {
+      if (on) doc.titlePage = true;
+      else delete doc.titlePage;
+      layout();
+      scheduleSave();
+      renderInspector();
+    },
+    setEvenOdd: (on) => {
+      if (on) doc.evenOdd = true;
+      else delete doc.evenOdd;
+      layout();
+      scheduleSave();
+      renderInspector();
+    },
+    editHeaderFooter: () => toggleHF(),
+    print: () => void printDocument(),
+  });
+
   bindFormatBar(() => updateToolbar());
   renderFormatBar();
+  // The inspector may have been left open: it is bound after the document
+  // opens, so the first draw has to happen here rather than in openDoc.
+  if (uiState().inspectorOpen) renderInspector();
   bindBubble({
     bold: () => toggleInline('bold'),
     italic: () => toggleInline('italic'),

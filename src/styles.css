@@ -1233,3 +1233,167 @@ body.is-mobile #canvas {
 .fb-hidden { display: none !important; }
 .fb-group { display: flex; align-items: center; gap: 1px; }
 
+/* ---------- the selection bubble ---------- */
+.bubble {
+  position: absolute;
+  z-index: 45;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  color: var(--mid);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  box-shadow: 0 10px 28px -12px rgba(0, 0, 0, 0.55);
+  animation: fb-in 90ms ease-out;
+}
+.bubble.below { animation: fb-in-below 90ms ease-out; }
+@keyframes fb-in-below {
+  from { opacity: 0; transform: translateY(-3px); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .bubble, .bubble.below { animation: none; }
+}
+.fb-clear { font-size: 14px; }
+
+/* ---------- the inspector ---------- */
+.insp-head {
+  padding: var(--s3) var(--s4) var(--s2);
+  border-bottom: 1px solid var(--line);
+}
+.insp-heading {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.24em;
+  color: var(--dim);
+}
+.insp-section {
+  padding: var(--s4) var(--s4) var(--s5);
+  border-bottom: 1px solid var(--line);
+}
+.insp-title {
+  margin: 0 0 var(--s3);
+  font: 600 11px var(--ui);
+  color: var(--hi);
+}
+.insp-field {
+  display: flex;
+  align-items: center;
+  gap: var(--s2);
+  margin-bottom: var(--s2);
+}
+.insp-label {
+  flex: none;
+  width: 78px;
+  font: 11px var(--ui);
+  color: var(--mid);
+}
+.insp-seg {
+  flex: 1;
+  display: flex;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.insp-seg-btn {
+  flex: 1;
+  padding: 4px 0;
+  border: 0;
+  border-right: 1px solid var(--line);
+  background: transparent;
+  color: var(--mid);
+  font: 10.5px var(--ui);
+  cursor: pointer;
+}
+.insp-seg-btn:last-child { border-right: 0; }
+.insp-seg-btn:hover { background: var(--panel); color: var(--hi); }
+.insp-seg-btn.on { background: var(--acc); color: var(--accfg); }
+
+.insp-edges {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--s2);
+  margin: var(--s2) 0 var(--s3) 86px;
+}
+.insp-edge { display: flex; align-items: center; gap: var(--s2); }
+.insp-edge-label {
+  flex: none;
+  width: 42px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  color: var(--dim);
+}
+.insp-num, .insp-text {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--bg);
+  color: var(--hi);
+  font: 11px var(--ui);
+}
+.insp-num:focus, .insp-text:focus { outline: none; border-color: var(--acc); }
+
+.insp-toggle {
+  flex: none;
+  min-width: 52px;
+  padding: 4px 0;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--mid);
+  font: 10.5px var(--ui);
+  cursor: pointer;
+}
+.insp-toggle.on { background: var(--acc); color: var(--accfg); border-color: var(--acc); }
+
+.insp-action {
+  width: 100%;
+  margin-top: var(--s2);
+  padding: 7px 0;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--panel);
+  color: var(--mid);
+  font: 11px var(--ui);
+  cursor: pointer;
+}
+.insp-action:hover { border-color: var(--acc); color: var(--hi); }
+.insp-note {
+  margin: 0 0 var(--s2);
+  font: 11px var(--ui);
+  line-height: 1.5;
+  color: var(--dim);
+}
+
+/* The document map is pinned to the right edge, which is where the
+   inspector is. One of them has to go, and it is the map: the inspector
+   is open because you asked for it. */
+#app.inspector-open .spine { display: none; }
+
+@page { size: letter; margin: 0; }
+
+@media print {
+  html, body { overflow: visible; background: #fff; height: auto; }
+  #rail, #measure, #banner, .menu, .gutter, .spine, #statusbar, #inspector,
+  #formatbar, .formatbar, .bubble, .cmd-scrim, .xs-scrim,
+  .drawer-toggle, .drawer-scrim { display: none; }
+  #app, #canvas, #doc {
+    margin: 0;
+    padding: 0;
+    display: block;
+    height: auto;
+    overflow: visible;
+  }
+  .page {
+    box-shadow: none;
+    margin: 0;
+    break-after: page;
+    page-break-after: always;
+  }
+  .page:last-child { break-after: auto; page-break-after: auto; }
+}

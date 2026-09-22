@@ -1105,12 +1105,78 @@ body.col-resizing { user-select: none; }
   white-space: pre-wrap;
 }
 
+
+/* ---------- a phone ----------
+   Nothing here scales the page: the viewport is widened instead, so the
+   browser scales the rendered result and every measurement stays in the
+   CSS pixels the paginator compares against. What changes is the chrome. */
+body.is-mobile #rail {
+  position: fixed;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 60;
+  transform: translateX(-100%);
+  transition: transform 160ms ease-out;
+  box-shadow: 0 0 40px -6px rgba(0, 0, 0, 0.7);
+}
+body.is-mobile #app.drawer-open #rail { transform: none; }
+
+body.is-mobile .drawer-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+  background: rgba(0, 0, 0, 0.45);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 160ms ease-out;
+}
+/* The scrim is appended to the body after #app, so a general sibling
+   selector is what reaches it. */
+body.is-mobile #app.drawer-open ~ .drawer-scrim {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.drawer-toggle { display: none; }
+body.is-mobile .drawer-toggle {
+  display: block;
+  position: fixed;
+  top: 14px;
+  left: 14px;
+  z-index: 70;
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  background: var(--panel);
+  color: var(--hi);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+/* The map and the page numbers are for a mouse and a wide window. The
+   readout stays: it is the only thing that says where you are. */
+body.is-mobile .spine,
+body.is-mobile .gutter-num,
+body.is-mobile .gutter-lead { display: none; }
+body.is-mobile #canvas { padding-left: 0; padding-right: 0; }
+body.is-mobile .readout { left: 12px; bottom: 10px; }
+
+/* A touch target of forty pixels, at a viewport the browser is scaling
+   down: the rail's own controls are designed for a pointer. */
+body.is-mobile .rail-btn,
+body.is-mobile .file-row,
+body.is-mobile .outline-row { min-height: 40px; }
+
 @page { size: letter; margin: 0; }
 
 @media print {
   html, body { overflow: visible; background: #fff; height: auto; }
   #rail, #measure, #banner, .menu, .gutter, .spine, .readout,
-  .cmd-scrim, .formatbar, .xs-scrim { display: none; }
+  .cmd-scrim, .formatbar, .xs-scrim,
+  .drawer-toggle, .drawer-scrim { display: none; }
   #app, #canvas, #doc {
     margin: 0;
     padding: 0;

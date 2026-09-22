@@ -92,6 +92,7 @@ import { importDocx } from './docx-import';
 import type { MenuItem } from './ui';
 import { closeMenu, iconButton, menuButton, openMenuAt, textButton } from './ui';
 import { ask } from './ask';
+import { bindMobile, closeDrawer } from './mobile';
 import type { Version } from './versions';
 import { forgetVersions, keepVersion, listVersions, whenLabel } from './versions';
 import {
@@ -1168,6 +1169,7 @@ const TABLE_SIZES = [
 ];
 
 function afterInsert(message: string): void {
+  closeDrawer();
   syncModel();
   reflowNow();
   snapshot('structural');
@@ -1603,6 +1605,7 @@ function sampleDoc(): Doc {
 
 function boot(): void {
   injectStyleSheet();
+  bindMobile();
   const root = docEl();
 
   applyPalette(currentPaletteId());

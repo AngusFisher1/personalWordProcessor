@@ -9,3 +9,19 @@ export { toMarkdown, toHtml } from '../src/export-text';
 export { fromMarkdown } from '../src/import-md';
 export { sectionsOf, sectionIndexByBlock, plainText } from '../src/model';
 export { addMedia } from '../src/media';
+export { buildCommands } from '../src/command-list';
+export {
+  CATEGORIES,
+  allCommands,
+  auditCommands,
+  clearRegistry,
+  commandForEvent,
+  formatShortcut,
+  noteUsed,
+  parseChord,
+  recentCommands,
+  register,
+  runCommand,
+  setPlatform,
+  visibleCommands,
+} from '../src/registry';

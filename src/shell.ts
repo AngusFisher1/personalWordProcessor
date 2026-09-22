@@ -459,10 +459,47 @@ export function ensureGutter(): HTMLElement {
  * rule marks each break. Drawn as an overlay rather than inside the pages, so
  * nothing here can end up on the paper or in the printed output.
  */
+/**
+ * What the gutter is drawn against.
+ *
+ * Every keystroke used to rebuild the whole gutter, one getBoundingClientRect
+ * per page. On a document of eighty pages that made a keystroke cost 15ms -
+ * O(document) work on the one path that has to be O(page). The positions
+ * only move when pagination does, so this signature decides whether to
+ * rebuild or merely to move the highlight.
+ */
+let gutterKey = '';
+
+function paginationKey(list: HTMLElement[]): string {
+  if (list.length === 0) return '0';
+  // Two rects rather than one per page: the count and the extent together
+  // change whenever any page has moved.
+  const first = list[0].getBoundingClientRect();
+  const last = list[list.length - 1].getBoundingClientRect();
+  return list.length + ':' + Math.round(first.top) + ':' + Math.round(last.bottom);
+}
+
+/** Move the highlight without touching anything else. */
+function markCurrent(root: HTMLElement, selector: string, currentPage: number): void {
+  const items = Array.from(root.querySelectorAll(selector)) as HTMLElement[];
+  items.forEach((n) => {
+    const i = Number(n.dataset.page);
+    n.classList.toggle('on', i === currentPage);
+  });
+}
+
 export function updateGutter(currentPage: number): void {
   const g = ensureGutter();
   const canvas = canvasEl();
   const list = pages();
+
+  const key = paginationKey(list) + '|' + canvas.scrollTop;
+  if (key === gutterKey) {
+    markCurrent(g, '.gutter-num, .gutter-lead', currentPage);
+    return;
+  }
+  gutterKey = key;
+
   g.textContent = '';
   const cRect = canvas.getBoundingClientRect();
 
@@ -472,12 +509,14 @@ export function updateGutter(currentPage: number): void {
     const left = r.left - cRect.left;
 
     const num = el('div', 'gutter-num', String(i + 1).padStart(2, '0'));
+    num.dataset.page = String(i);
     if (i === currentPage) num.classList.add('on');
     num.style.top = top - 1 + 'px';
     num.style.left = left - 76 + 'px';
     g.appendChild(num);
 
     const lead = el('div', 'gutter-lead');
+    lead.dataset.page = String(i);
     if (i === currentPage) lead.classList.add('on');
     lead.style.top = top + 6 + 'px';
     lead.style.left = left - 26 + 'px';
@@ -506,9 +545,11 @@ export function updateGutter(currentPage: number): void {
 
 /** Fractions down the document at which to tick the map, for find matches. */
 let spineMarks: number[] = [];
+let spineKey = '';
 
 export function setSpineMarks(marks: number[]): void {
   spineMarks = marks;
+  spineKey = ''; // the ticks are part of what is drawn
   updateSpine(currentPageIndex());
 }
 
@@ -521,16 +562,30 @@ export function updateSpine(currentPage: number): void {
     ui.spine = s;
   }
   const list = pages();
-  s.textContent = '';
-  if (list.length === 0) return;
+  if (list.length === 0) {
+    s.textContent = '';
+    return;
+  }
 
   const doc = docEl();
+  // The bars only move when the page count or the marks do; the viewport
+  // rectangle moves on every scroll and is cheap to reposition alone.
+  const key = list.length + ':' + spineMarks.length + ':' + Math.round(s.clientHeight);
+  if (key === spineKey) {
+    markCurrent(s, '.spine-bar', currentPage);
+    positionSpineView(s, doc, list.length);
+    return;
+  }
+  spineKey = key;
+  s.textContent = '';
+
   const gap = 8;
   const avail = s.clientHeight - 24;
   const barH = Math.max(6, (avail - gap * (list.length - 1)) / list.length);
 
   list.forEach((_page, i) => {
     const bar = el('div', 'spine-bar');
+    bar.dataset.page = String(i);
     if (i === currentPage) bar.classList.add('on');
     bar.style.top = 12 + i * (barH + gap) + 'px';
     bar.style.height = barH + 'px';
@@ -554,17 +609,31 @@ export function updateSpine(currentPage: number): void {
     }
   }
 
-  // The slice of the document actually on screen.
+  positionSpineView(s, doc, list.length);
+}
+
+/**
+ * The slice of the document on screen.
+ *
+ * Kept as one element that is moved rather than rebuilt: it is the only part
+ * of the map that changes on a scroll, and scrolling is the one thing that
+ * happens more often than typing.
+ */
+function positionSpineView(s: HTMLElement, doc: HTMLElement, pageCount: number): void {
   const total = doc.scrollHeight;
-  if (total > 0) {
-    const view = el('div', 'spine-view');
-    const trackTop = 12;
-    const trackH = list.length * barH + (list.length - 1) * gap;
-    view.style.top = trackTop + (doc.scrollTop / total) * trackH + 'px';
-    view.style.height =
-      Math.max(14, (doc.clientHeight / total) * trackH) + 'px';
+  if (total <= 0) return;
+  let view = s.querySelector(':scope > .spine-view') as HTMLElement | null;
+  if (!view) {
+    view = el('div', 'spine-view');
     s.appendChild(view);
   }
+  const gap = 8;
+  const avail = s.clientHeight - 24;
+  const barH = Math.max(6, (avail - gap * (pageCount - 1)) / pageCount);
+  const trackTop = 12;
+  const trackH = pageCount * barH + (pageCount - 1) * gap;
+  view.style.top = trackTop + (doc.scrollTop / total) * trackH + 'px';
+  view.style.height = Math.max(14, (doc.clientHeight / total) * trackH) + 'px';
 }
 
 /* ------------------------------------------------------------------ *

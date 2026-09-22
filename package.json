@@ -22,7 +22,8 @@
     "test:format": "npm run build:harness && node test/format.test.mjs",
     "test:run": "npm run build:harness && node test/run.test.mjs",
     "test:pagination": "node test/pagination.mjs",
-    "test:insert": "npm run build:harness && node test/insert.test.mjs"
+    "test:insert": "npm run build:harness && node test/insert.test.mjs",
+    "test:perf": "node test/perf.mjs"
   },
   "devDependencies": {
     "@xmldom/xmldom": "^0.9.12",

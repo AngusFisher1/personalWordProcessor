@@ -25,3 +25,4 @@ export {
   setPlatform,
   visibleCommands,
 } from '../src/registry';
+export { loadUiState, setUiState, uiState } from '../src/uistate';

@@ -346,10 +346,16 @@ function renderFiles(): void {
     });
 
     row.append(tick, body, more);
+    row.tabIndex = 0;
+    row.setAttribute('role', 'option');
+    row.setAttribute('aria-selected', String(e.id === currentDocId));
     row.addEventListener('mousedown', (ev) => ev.preventDefault());
     row.addEventListener('click', () => {
       if (e.id !== currentDocId) hooks?.onOpenDoc(e.id);
     });
+    row.addEventListener('keydown', (ev) => listKeys(ev, '.file-row', () => {
+      if (e.id !== currentDocId) hooks?.onOpenDoc(e.id);
+    }));
     list.appendChild(row);
   });
 
@@ -474,6 +480,28 @@ function renderComments(doc: Doc, box: HTMLElement): void {
   }
 }
 
+/**
+ * Arrow keys move through a list, Enter opens.
+ *
+ * Roving focus rather than a selected index: the rows are real buttons in
+ * the tab order, so moving focus IS moving the selection and there is no
+ * second piece of state to keep in step with it.
+ */
+function listKeys(e: KeyboardEvent, selector: string, open: () => void): void {
+  const rows = Array.from(
+    (e.currentTarget as HTMLElement).parentElement?.querySelectorAll(selector) ?? []
+  ) as HTMLElement[];
+  const at = rows.indexOf(e.currentTarget as HTMLElement);
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    const next = rows[at + (e.key === 'ArrowDown' ? 1 : -1)];
+    next?.focus();
+  } else if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    open();
+  }
+}
+
 /** Headings, in document order, as a clickable outline. */
 export function updateOutline(doc: Doc, activeId: string | null): void {
   const box = ui.outline;
@@ -503,8 +531,13 @@ export function updateOutline(doc: Doc, activeId: string | null): void {
     if (e.id === activeId) row.classList.add('on');
     const tick = el('span', 'outline-tick');
     row.append(tick, el('span', 'outline-text', e.text));
+    row.tabIndex = 0;
+    row.setAttribute('role', 'option');
     row.addEventListener('mousedown', (ev) => ev.preventDefault());
     row.addEventListener('click', () => hooks?.onOutlineClick(e.id));
+    row.addEventListener('keydown', (ev) =>
+      listKeys(ev, '.outline-row', () => hooks?.onOutlineClick(e.id))
+    );
     box.appendChild(row);
   }
   renderComments(doc, box);

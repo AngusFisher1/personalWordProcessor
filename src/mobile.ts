@@ -47,8 +47,25 @@ function shouldBeMobile(): boolean {
   return coarse && narrow;
 }
 
+/**
+ * On a phone the drawer IS the nav panel's collapsed state.
+ *
+ * Two booleans for one panel is how a panel ends up open according to one
+ * of them and closed according to the other, so the phone drives the same
+ * state the Ctrl+\ toggle does.
+ */
+let toggleNav: (() => void) | null = null;
+let navCollapsed: (() => boolean) | null = null;
+
+export function setNavHooks(toggle: () => void, collapsed: () => boolean): void {
+  toggleNav = toggle;
+  navCollapsed = collapsed;
+}
+
 function setDrawer(open: boolean): void {
-  document.getElementById('app')?.classList.toggle('drawer-open', open);
+  if (!navCollapsed || !toggleNav) return;
+  if (navCollapsed() === !open) return;
+  toggleNav();
 }
 
 function buildDrawerControls(): void {
@@ -60,10 +77,7 @@ function buildDrawerControls(): void {
   toggle.setAttribute('aria-label', 'Show controls');
   toggle.textContent = '≡';
   toggle.addEventListener('mousedown', (e) => e.preventDefault());
-  toggle.addEventListener('click', () => {
-    const app = document.getElementById('app');
-    setDrawer(!app?.classList.contains('drawer-open'));
-  });
+  toggle.addEventListener('click', () => setDrawer(navCollapsed?.() ?? true));
   document.body.appendChild(toggle);
 
   // Tapping the page closes the drawer, which is what every drawer does and

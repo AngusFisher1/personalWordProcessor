@@ -88,7 +88,7 @@ import { importDocx } from './docx-import';
 import type { MenuItem } from './ui';
 import { closeMenu, openMenuAt } from './ui';
 import { ask, isAskOpen } from './ask';
-import { bindMobile, closeDrawer } from './mobile';
+import { bindMobile, closeDrawer, setNavHooks } from './mobile';
 import { bindInspector, renderInspector as drawInspector } from './inspector';
 import {
   bindSettings,
@@ -1246,7 +1246,16 @@ function boot(): void {
   bindMobile();
   setPlatform(IS_MAC);
   loadUiState();
+  setNavHooks(
+    () => toggleNav(),
+    () => uiState().navCollapsed
+  );
   setRecent(uiState().recent);
+  // A window too narrow for the page and both panels starts with the nav
+  // out of the way; Ctrl+\ brings it back as an overlay.
+  if (window.matchMedia('(max-width: 1100px)').matches && !uiState().navCollapsed) {
+    setUiState({ navCollapsed: true });
+  }
   register(buildCommands(commandActions()));
   setCommandsHooks(() => setUiState({ recent: recentIds() }));
   applyPanels();

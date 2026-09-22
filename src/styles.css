@@ -1147,6 +1147,7 @@ body.col-resizing { user-select: none; }
    browser scales the rendered result and every measurement stays in the
    CSS pixels the paginator compares against. What changes is the chrome. */
 body.is-mobile #rail {
+  display: block;
   position: fixed;
   top: 0;
   bottom: 0;
@@ -1156,7 +1157,7 @@ body.is-mobile #rail {
   transition: transform 160ms ease-out;
   box-shadow: 0 0 40px -6px rgba(0, 0, 0, 0.7);
 }
-body.is-mobile #app.drawer-open #rail { transform: none; }
+body.is-mobile #app:not(.nav-collapsed) #rail { transform: none; }
 
 body.is-mobile .drawer-scrim {
   position: fixed;
@@ -1169,7 +1170,7 @@ body.is-mobile .drawer-scrim {
 }
 /* The scrim is appended to the body after #app, so a general sibling
    selector is what reaches it. */
-body.is-mobile #app.drawer-open ~ .drawer-scrim {
+body.is-mobile #app:not(.nav-collapsed) ~ .drawer-scrim {
   opacity: 1;
   pointer-events: auto;
 }
@@ -1473,6 +1474,54 @@ body.is-mobile #canvas {
   color: var(--dim);
 }
 .status-gear { font-size: 11px; }
+
+
+/* ---------- focus ----------
+   Every interactive element shows where the keyboard is. :focus-visible
+   rather than :focus, so a mouse click does not leave a ring behind it;
+   the offset keeps the ring off the glyph in the dense mono labels. */
+:where(button, input, [tabindex], .file-row, .outline-row, .cmt-row):focus-visible {
+  outline: 2px solid var(--acc);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+#doc:focus-visible { outline: none; }
+
+/* A disabled control still reads as a control, just not as a live one. */
+button:disabled { opacity: 0.4; cursor: default; }
+.cmd-row.off { opacity: 0.45; }
+
+/* Lists are walked with the arrows, so their rows have to be reachable. */
+.file-row, .outline-row, .cmt-row { outline-offset: -2px; }
+
+
+/* ---------- narrow windows ----------
+   Below 1100px the page plus both panels stops fitting, so both panels
+   become overlays: they float over the canvas instead of taking width from
+   it, and the page keeps the room it needs. The nav panel auto-collapses
+   on the way in and is reopened with the same Ctrl+\ as ever. */
+@media (max-width: 1100px) {
+  #rail {
+    position: absolute;
+    top: 0;
+    bottom: var(--status-h);
+    left: 0;
+    z-index: 60;
+    box-shadow: 0 0 40px -6px rgba(0, 0, 0, 0.7);
+  }
+  #app.nav-collapsed #rail { display: none; }
+
+  #inspector {
+    position: absolute;
+    top: 0;
+    bottom: var(--status-h);
+    right: 0;
+    z-index: 60;
+    box-shadow: 0 0 40px -6px rgba(0, 0, 0, 0.7);
+  }
+  /* The map has nowhere to go when the inspector is floating over it. */
+  #app.inspector-open .spine { display: none; }
+}
 
 @page { size: letter; margin: 0; }
 

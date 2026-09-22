@@ -297,6 +297,13 @@ export interface Doc2Extras {
   headerDistance?: number;
   footerDistance?: number;
   /**
+   * The family an imported document sets for text that names none of its
+   * own. Absent on documents this program wrote, which are set in its own
+   * serif - the point of carrying it is that an imported document should
+   * look like itself, and break its lines where Word breaks them.
+   */
+  defaultFont?: string;
+  /**
    * Sections, when the document has more than one. Absent means one section
    * with `page`, `headers` and `footers`, which is what most documents are
    * and what everything written before sections existed still deserializes as.

@@ -11,7 +11,7 @@ import {
   uniformMargins,
   sectionsOf,
 } from './model';
-import { DOC_FONT, STYLES, injectStyleSheet } from './styles';
+import { DOC_FONT, STYLES, injectStyleSheet, setDocumentFont } from './styles';
 import { blockEl, blocksIn, docEl, pages, readModel, renderAll } from './render';
 import {
   clearHeightCache,
@@ -1182,6 +1182,9 @@ function openDoc(d: Doc): void {
   if (isExportSheetOpen()) closeExportSheet();
   hideFormatBar();
   doc = d;
+  // Font before geometry: setPageSetup clears the height cache, and every
+  // cached height was measured in whatever family was set at the time.
+  setDocumentFont(d.defaultFont);
   setPageSetup(d.page);
   if (ui.title) ui.title.value = d.title;
   lastWords = -1;

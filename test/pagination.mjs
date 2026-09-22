@@ -100,13 +100,23 @@ for (const f of files) {
         }
         return last;
       };
-      return await settle();
+      const n = await settle();
+      const blk = document.querySelector('#doc .blk');
+      return {
+        pages: n,
+        asked: window.wp.doc().defaultFont ?? null,
+        // The first family the browser actually had. If it is not the one
+        // the document asked for, our line breaks cannot match Word's.
+        used: blk
+          ? getComputedStyle(blk).fontFamily.split(',')[0].replace(/"/g, '').trim()
+          : null,
+      };
     }, b64);
   } catch (err) {
     rows.push({ name: basename(f), expected, got: null, err: String(err).slice(0, 60) });
     continue;
   }
-  rows.push({ name: basename(f), expected, got });
+  rows.push({ name: basename(f), expected, got: got.pages, asked: got.asked, used: got.used });
 }
 
 await browser.close();
@@ -133,6 +143,25 @@ if (off.length > 0) {
     );
   }
 }
+const substituted = usable.filter(
+  (r) => r.asked && r.used && r.asked.toLowerCase() !== r.used.toLowerCase()
+);
+if (substituted.length > 0) {
+  const by = new Map();
+  for (const r of substituted) {
+    const k = r.asked + ' → ' + r.used;
+    by.set(k, (by.get(k) ?? 0) + 1);
+  }
+  console.log(
+    `
+font substituted on ${substituted.length} of ${usable.length} documents ` +
+      `(${pct(substituted.length)}); their line breaks cannot match Word's:`
+  );
+  for (const [k, v] of [...by].sort((a, b) => b[1] - a[1])) {
+    console.log(`  ${String(v).padStart(3)}  ${k}`);
+  }
+}
+
 const failed = rows.filter((r) => r.got === null);
 if (failed.length > 0) {
   console.log('\nfailed to open:');

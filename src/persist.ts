@@ -205,6 +205,7 @@ function coerceExtras(o: Record<string, unknown>): Partial<Doc> {
   if (o.evenOdd === true) out.evenOdd = true;
   if (typeof o.headerDistance === 'number') out.headerDistance = o.headerDistance;
   if (typeof o.footerDistance === 'number') out.footerDistance = o.footerDistance;
+  if (typeof o.defaultFont === 'string' && o.defaultFont) out.defaultFont = o.defaultFont;
 
   if (Array.isArray(o.sections) && o.sections.length > 1) {
     const sections: Section[] = o.sections.map((raw, i) => {

@@ -333,6 +333,43 @@ const SPLIT_CSS =
  * looking like itself, while the model goes on storing Word's own number so
  * the round trip stays exact.
  */
+/**
+ * Open faces drawn to the same metrics as the Microsoft ones.
+ *
+ * Substituting a font of different metrics moves every line break, which is
+ * the difference between a page count that matches Word's and one that does
+ * not. These four are designed as drop-in metric equivalents; where one is
+ * installed it is a far better second choice than our own serif.
+ *
+ * Aptos, Word's current default, has no open twin - a document set in it on
+ * a machine without it cannot be paginated the way Word paginates it, and
+ * the harness reports that rather than hiding it.
+ */
+const METRIC_TWINS: Record<string, string> = {
+  calibri: 'Carlito',
+  cambria: 'Caladea',
+  'times new roman': 'Liberation Serif',
+  arial: 'Liberation Sans',
+  helvetica: 'Liberation Sans',
+  'courier new': 'Liberation Mono',
+};
+
+/**
+ * Set the family an imported document asks for.
+ *
+ * Documents this program writes set nothing here and stay in its own serif.
+ */
+export function setDocumentFont(family: string | undefined): void {
+  const st = document.documentElement.style;
+  if (!family) {
+    st.removeProperty('--doc-font');
+    return;
+  }
+  const twin = METRIC_TWINS[family.toLowerCase()];
+  const chain = twin ? `"${family}", "${twin}", ${DOC_FONT}` : `"${family}", ${DOC_FONT}`;
+  st.setProperty('--doc-font', chain);
+}
+
 export const WORD_SINGLE_LINE = 1.2;
 
 /**
@@ -405,7 +442,7 @@ export function injectStyleSheet(): void {
   const el = document.createElement('style');
   el.id = id;
   el.textContent =
-    `.blk { font-family: ${DOC_FONT}; color: ${INK}; }\n` +
+    `.blk { font-family: var(--doc-font, ${DOC_FONT}); color: ${INK}; }\n` +
     STYLE_IDS.map((s) => css(STYLES[s])).join('') +
     LIST_CSS +
     TABLE_CSS +

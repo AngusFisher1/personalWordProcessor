@@ -446,11 +446,29 @@ interface StyleInfo {
   names: Map<string, string>;
   /** w:docDefaults run size in half-points, for judging what counts as big. */
   defaultSizeHalfPt: number | null;
+  /** The family the document sets for text that names none of its own. */
+  defaultFont: string | null;
 }
 
-function readStyles(xml: string | null): StyleInfo {
+/**
+ * The body font a theme names.
+ *
+ * Most modern Word documents do not name a font in styles.xml at all: they
+ * write `+minorHAnsi`, a reference into the theme. 37 of 63 documents in a
+ * real corpus are in that shape, so a reader that stops at styles.xml finds
+ * a font for fewer than half of them.
+ */
+function themeFont(xml: string | null): string | null {
+  if (!xml) return null;
+  // minorFont is body text; majorFont is headings.
+  const minor = /<a:minorFont>[\s\S]*?<\/a:minorFont>/.exec(xml)?.[0] ?? '';
+  const latin = /<a:latin[^>]*typeface="([^"]*)"/.exec(minor)?.[1] ?? null;
+  return latin && latin !== '' ? latin : null;
+}
+
+function readStyles(xml: string | null, theme: string | null): StyleInfo {
   const names = new Map<string, string>();
-  if (!xml) return { names, defaultSizeHalfPt: null };
+  if (!xml) return { names, defaultSizeHalfPt: null, defaultFont: theme };
   const doc = new DOMParser().parseFromString(xml, 'application/xml');
   const root = doc.documentElement;
 
@@ -461,12 +479,18 @@ function readStyles(xml: string | null): StyleInfo {
   }
 
   let size: number | null = null;
+  let font: string | null = null;
   const fromDefaults = kid(
     kid(kid(root, 'docDefaults'), 'rPrDefault'),
     'rPr'
   );
   const dsz = intOf(wAttr(kid(fromDefaults, 'sz'), 'val'), 0);
   if (dsz > 0) size = dsz;
+  const dFonts = kid(fromDefaults, 'rFonts');
+  // The ascii face is the one Latin text is set in; hAnsi is its fallback.
+  // A theme reference (+minorHAnsi) names a font we do not have a theme for.
+  const dAscii = dFonts ? wAttr(dFonts, 'ascii') ?? wAttr(dFonts, 'hAnsi') : null;
+  if (dAscii && !dAscii.startsWith('+')) font = dAscii;
   if (size === null) {
     // Fall back to whichever paragraph style is marked as the default.
     for (const st of kids(root, 'style')) {
@@ -478,7 +502,20 @@ function readStyles(xml: string | null): StyleInfo {
       }
     }
   }
-  return { names, defaultSizeHalfPt: size };
+  if (font === null) {
+    for (const st of kids(root, 'style')) {
+      if (wAttr(st, 'default') !== '1' && wAttr(st, 'default') !== 'true') continue;
+      const f = kid(kid(st, 'rPr'), 'rFonts');
+      const ascii = f ? wAttr(f, 'ascii') ?? wAttr(f, 'hAnsi') : null;
+      if (ascii && !ascii.startsWith('+')) {
+        font = ascii;
+        break;
+      }
+    }
+  }
+  // A theme reference resolves to whatever the theme says; an absent font
+  // means the same thing, because Word's own fallback is the theme.
+  return { names, defaultSizeHalfPt: size, defaultFont: font ?? theme };
 }
 
 /**
@@ -897,8 +934,9 @@ export async function importDocx(
   if (!body) throw new Error('Not a Word document: no body element');
 
   const serialize = makeSerializer(xml.documentElement);
-  const { names: styleNames, defaultSizeHalfPt } = readStyles(
-    partText(parts, 'word/styles.xml')
+  const { names: styleNames, defaultSizeHalfPt, defaultFont } = readStyles(
+    partText(parts, 'word/styles.xml'),
+    themeFont(partText(parts, 'word/theme/theme1.xml'))
   );
   const numbering = readNumbering(partText(parts, 'word/numbering.xml'));
   const rels = readRels(partText(parts, 'word/_rels/document.xml.rels'));
@@ -1314,6 +1352,7 @@ export async function importDocx(
     ...(evenOdd ? { evenOdd } : {}),
     headerDistance,
     footerDistance,
+    ...(defaultFont ? { defaultFont } : {}),
   };
 
   return { doc, vault };

@@ -304,6 +304,15 @@ export interface Doc2Extras {
    */
   defaultFont?: string;
   /**
+   * What this document changes about the six named styles.
+   *
+   * Per document rather than global: a resume set in 10pt and a report set
+   * in 12pt are both right, and a preference that followed you between them
+   * would be wrong in one of them. Shape is
+   * `{ Body: { size: 12 }, … }`; anything absent is the shipped value.
+   */
+  styles?: Record<string, Record<string, unknown>>;
+  /**
    * Sections, when the document has more than one. Absent means one section
    * with `page`, `headers` and `footers`, which is what most documents are
    * and what everything written before sections existed still deserializes as.

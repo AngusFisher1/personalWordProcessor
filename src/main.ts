@@ -11,7 +11,15 @@ import {
   uniformMargins,
   sectionsOf,
 } from './model';
-import { DOC_FONT, STYLES, injectStyleSheet, setDocumentFont } from './styles';
+import type { StyleOverrides } from './styles';
+import {
+  DOC_FONT,
+  STYLES,
+  injectStyleSheet,
+  setDocumentFont,
+  setStyleOverrides,
+  shippedStyle,
+} from './styles';
 import { blockEl, blocksIn, docEl, pages, readModel, renderAll } from './render';
 import {
   clearHeightCache,
@@ -80,7 +88,8 @@ import {
 import type { Vault } from './docx-package';
 import { deleteOriginal, loadOriginal, saveOriginal } from './docx-package';
 import { importDocx } from './docx-import';
-import { closeMenu, iconButton, menuButton, textButton } from './ui';
+import type { MenuItem } from './ui';
+import { closeMenu, iconButton, menuButton, openMenuAt, textButton } from './ui';
 import type { Command } from './commandbar';
 import { closeCommands, isCommandsOpen, openCommands } from './commandbar';
 import { bindFormatBar, hideFormatBar } from './formatbar';
@@ -120,6 +129,7 @@ const ui = {
   page: null as ReturnType<typeof menuButton> | null,
   para: null as ReturnType<typeof menuButton> | null,
   text: null as ReturnType<typeof menuButton> | null,
+  styles: null as ReturnType<typeof menuButton> | null,
   hf: null as HTMLButtonElement | null,
   palette: null as ReturnType<typeof menuButton> | null,
   title: null as HTMLInputElement | null,
@@ -269,6 +279,36 @@ function buildToolbar(host: HTMLElement): void {
     'tb-style'
   );
   host.appendChild(ui.style.el);
+
+  // The named styles themselves, per document.
+  ui.styles = menuButton('Styles', 'What the six named styles look like', () => {
+    const current = currentStyle();
+    const rows: MenuItem[] = [{ heading: 'Edit a style' }];
+    for (const id of STYLE_IDS) {
+      const d = STYLES[id];
+      const changed = JSON.stringify(d) !== JSON.stringify(shippedStyle(id));
+      rows.push({
+        label: d.label + (changed ? ' ·' : ''),
+        checked: id === current,
+        preview: {
+          fontFamily: DOC_FONT,
+          fontSize: Math.min(19, Math.max(12, d.size * 1.2)) + 'px',
+          fontWeight: d.bold ? '700' : '400',
+          textTransform: d.uppercase ? 'uppercase' : 'none',
+          letterSpacing: d.letterSpacing ? d.letterSpacing + 'px' : 'normal',
+        },
+        onSelect: () => openMenuAt(ui.styles?.el as HTMLElement, styleEditorRows(id)),
+      });
+    }
+    rows.push({ separator: true });
+    rows.push({
+      label: 'Reset every style',
+      disabled: !doc.styles,
+      onSelect: () => resetStyles(),
+    });
+    return rows;
+  });
+  host.appendChild(ui.styles.el);
 
   // Character formatting. Disabled with no selection, because every entry
   // applies to a range: there is nothing to size or colour without one.
@@ -1007,6 +1047,112 @@ function showExportSheet(): void {
 }
 
 /* ------------------------------------------------------------------ *
+ * The styles editor
+ *
+ * Six styles are the whole vocabulary this program writes in, and they were
+ * hardcoded. A resume set in 10pt and a report set in 12pt are both right,
+ * so the overrides live on the DOCUMENT - a global preference would be
+ * wrong in one of them.
+ * ------------------------------------------------------------------ */
+
+const STYLE_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 20, 24, 28, 36];
+const STYLE_LEADING = [1, 1.15, 1.3, 1.45, 1.6, 2];
+const STYLE_SPACE = [0, 2, 4, 6, 8, 12, 18];
+
+function styleOverride(id: StyleId, field: string, value: unknown): void {
+  syncModel();
+  const all: Record<string, Record<string, unknown>> = { ...(doc.styles ?? {}) };
+  const over = { ...(all[id] ?? {}) };
+  // A value equal to the shipped one is not an override, it is agreement.
+  const shipped = shippedStyle(id) as unknown as Record<string, unknown>;
+  if (JSON.stringify(shipped[field]) === JSON.stringify(value)) delete over[field];
+  else over[field] = value;
+  if (Object.keys(over).length === 0) delete all[id];
+  else all[id] = over;
+  doc.styles = Object.keys(all).length > 0 ? all : undefined;
+
+  setStyleOverrides(doc.styles as StyleOverrides | undefined);
+  // Every cached height was measured against the old table.
+  clearHeightCache();
+  reflowNow();
+  snapshot('structural');
+  scheduleSave();
+  flashRail('STYLE UPDATED');
+}
+
+function resetStyles(): void {
+  syncModel();
+  doc.styles = undefined;
+  setStyleOverrides(undefined);
+  clearHeightCache();
+  reflowNow();
+  snapshot('structural');
+  scheduleSave();
+  flashRail('STYLES RESET');
+}
+
+/** The menu for one named style. */
+function styleEditorRows(id: StyleId): MenuItem[] {
+  const d = STYLES[id];
+  const shipped = shippedStyle(id);
+  const changed = JSON.stringify(d) !== JSON.stringify(shipped);
+  const pad = d.padding;
+  return [
+    { heading: d.label + (changed ? ' — changed' : '') },
+    ...STYLE_SIZES.map((v) => ({
+      label: v + ' pt',
+      checked: d.size === v,
+      onSelect: () => styleOverride(id, 'size', v),
+    })),
+    { separator: true },
+    { heading: 'Weight and case' },
+    { label: 'Bold', checked: d.bold, onSelect: () => styleOverride(id, 'bold', !d.bold) },
+    {
+      label: 'Small capitals',
+      checked: d.uppercase,
+      onSelect: () => styleOverride(id, 'uppercase', !d.uppercase),
+    },
+    { label: 'Rule beneath', checked: d.rule, onSelect: () => styleOverride(id, 'rule', !d.rule) },
+    { separator: true },
+    { heading: 'Leading' },
+    ...STYLE_LEADING.map((v) => ({
+      label: v.toFixed(2).replace(/0$/, ''),
+      checked: Math.abs(d.lineHeight - v) < 0.01,
+      onSelect: () => styleOverride(id, 'lineHeight', v),
+    })),
+    { separator: true },
+    { heading: 'Space above' },
+    ...STYLE_SPACE.map((v) => ({
+      label: v + ' pt',
+      checked: pad[0] === v,
+      onSelect: () => styleOverride(id, 'padding', [v, pad[1], pad[2], pad[3]]),
+    })),
+    { heading: 'Space below' },
+    ...STYLE_SPACE.map((v) => ({
+      label: v + ' pt',
+      checked: pad[2] === v,
+      onSelect: () => styleOverride(id, 'padding', [pad[0], pad[1], v, pad[3]]),
+    })),
+    { separator: true },
+    {
+      label: 'Keep with next paragraph',
+      checked: d.keepWithNext,
+      onSelect: () => styleOverride(id, 'keepWithNext', !d.keepWithNext),
+    },
+    {
+      label: 'Never split across pages',
+      checked: d.keepLines,
+      onSelect: () => styleOverride(id, 'keepLines', !d.keepLines),
+    },
+    {
+      label: 'Always start a new page',
+      checked: d.pageBreakBefore,
+      onSelect: () => styleOverride(id, 'pageBreakBefore', !d.pageBreakBefore),
+    },
+  ];
+}
+
+/* ------------------------------------------------------------------ *
  * The command palette
  *
  * Built fresh each time it opens, so the ticks next to the current style
@@ -1185,6 +1331,7 @@ function openDoc(d: Doc): void {
   // Font before geometry: setPageSetup clears the height cache, and every
   // cached height was measured in whatever family was set at the time.
   setDocumentFont(d.defaultFont);
+  setStyleOverrides(d.styles as StyleOverrides | undefined);
   setPageSetup(d.page);
   if (ui.title) ui.title.value = d.title;
   lastWords = -1;

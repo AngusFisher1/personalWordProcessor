@@ -171,12 +171,69 @@ const PARAGRAPH_OVERRIDES: Partial<Record<StyleId, Partial<ParagraphProps>>> = {
   Contact: { keepLines: true },
 };
 
-export const STYLES: Record<StyleId, StyleDef> = Object.fromEntries(
+/** The table as shipped, before any document says otherwise. */
+const SHIPPED: Record<StyleId, StyleDef> = Object.fromEntries(
   STYLE_IDS.map((id) => [
     id,
     { ...PARAGRAPH_DEFAULTS, ...BASE[id], ...(PARAGRAPH_OVERRIDES[id] ?? {}) },
   ])
 ) as Record<StyleId, StyleDef>;
+
+/**
+ * The style table in force.
+ *
+ * Mutated in place rather than replaced, because everything in the program
+ * reads `STYLES[id]` directly - the CSS emitter, the style menu, the Enter
+ * key, the paginator's keep-with-next rules and both exporters. One table
+ * that changes is the whole feature; a second table would be a second
+ * source of truth to get out of step.
+ */
+export const STYLES: Record<StyleId, StyleDef> = Object.fromEntries(
+  STYLE_IDS.map((id) => [id, { ...SHIPPED[id] }])
+) as Record<StyleId, StyleDef>;
+
+/** What a document changes about the shipped styles. */
+export type StyleOverrides = Partial<Record<StyleId, Partial<StyleDef>>>;
+
+/** The fields a document may override; the rest are structural. */
+export const EDITABLE_STYLE_FIELDS = [
+  'size',
+  'bold',
+  'uppercase',
+  'letterSpacing',
+  'lineHeight',
+  'rule',
+  'hanging',
+  'padding',
+  'keepWithNext',
+  'keepLines',
+  'pageBreakBefore',
+  'widowMin',
+  'orphanMin',
+] as const;
+
+export type EditableStyleField = (typeof EDITABLE_STYLE_FIELDS)[number];
+
+export function shippedStyle(id: StyleId): StyleDef {
+  return SHIPPED[id];
+}
+
+/**
+ * Put a document's style overrides in force and redraw the stylesheet.
+ *
+ * Every cached height was measured against the old table, so the caller
+ * clears the height cache and reflows - which is why this returns rather
+ * than doing it: styles.ts must not know the paginator exists.
+ */
+export function setStyleOverrides(o: StyleOverrides | undefined): void {
+  for (const id of STYLE_IDS) {
+    const over = o?.[id] ?? {};
+    // Assigned field by field into the existing object so that anything
+    // holding a reference to STYLES[id] sees the change.
+    Object.assign(STYLES[id], SHIPPED[id], over);
+  }
+  emitStyleSheet();
+}
 
 export function styleDef(id: StyleId): StyleDef {
   return STYLES[id];
@@ -437,10 +494,18 @@ export function applyBlockFormat(
 }
 
 export function injectStyleSheet(): void {
+  emitStyleSheet();
+}
+
+/** Write (or rewrite) the named-style stylesheet from the table in force. */
+function emitStyleSheet(): void {
   const id = 'wp-named-styles';
-  if (document.getElementById(id)) return;
-  const el = document.createElement('style');
-  el.id = id;
+  let el = document.getElementById(id) as HTMLStyleElement | null;
+  if (!el) {
+    el = document.createElement('style');
+    el.id = id;
+    document.head.appendChild(el);
+  }
   el.textContent =
     `.blk { font-family: var(--doc-font, ${DOC_FONT}); color: ${INK}; }\n` +
     STYLE_IDS.map((s) => css(STYLES[s])).join('') +
@@ -450,5 +515,4 @@ export function injectStyleSheet(): void {
     FIND_CSS +
     HF_CSS +
     SPLIT_CSS;
-  document.head.appendChild(el);
 }

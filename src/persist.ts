@@ -206,6 +206,8 @@ function coerceExtras(o: Record<string, unknown>): Partial<Doc> {
   if (typeof o.headerDistance === 'number') out.headerDistance = o.headerDistance;
   if (typeof o.footerDistance === 'number') out.footerDistance = o.footerDistance;
   if (typeof o.defaultFont === 'string' && o.defaultFont) out.defaultFont = o.defaultFont;
+  const styles = coerceStyleOverrides(o.styles);
+  if (styles) out.styles = styles;
 
   if (Array.isArray(o.sections) && o.sections.length > 1) {
     const sections: Section[] = o.sections.map((raw, i) => {
@@ -236,6 +238,41 @@ function coerceExtras(o: Record<string, unknown>): Partial<Doc> {
  * a bad number would reach the CSS and a bad align string would reach the
  * exporter, which writes it into a w:jc that Word then refuses.
  */
+/**
+ * A document's style overrides, validated field by field.
+ *
+ * Only the fields the editor offers are accepted. A stored `id` or `enterTo`
+ * would let a file rename a style out of the set the rest of the program
+ * switches on, and a stored `bullet` would put a glyph on a style whose
+ * exporter does not write numbering for it.
+ */
+function coerceStyleOverrides(
+  raw: unknown
+): Record<string, Record<string, unknown>> | undefined {
+  if (!raw || typeof raw !== 'object') return undefined;
+  const numeric = new Set(['size', 'letterSpacing', 'lineHeight', 'hanging', 'widowMin', 'orphanMin']);
+  const boolish = new Set(['bold', 'uppercase', 'rule', 'keepWithNext', 'keepLines', 'pageBreakBefore']);
+  const out: Record<string, Record<string, unknown>> = {};
+  for (const [id, over] of Object.entries(raw as Record<string, unknown>)) {
+    if (!isStyleId(id) || !over || typeof over !== 'object') continue;
+    const kept: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(over as Record<string, unknown>)) {
+      if (numeric.has(k) && typeof v === 'number' && Number.isFinite(v)) kept[k] = v;
+      else if (boolish.has(k) && typeof v === 'boolean') kept[k] = v;
+      else if (
+        k === 'padding' &&
+        Array.isArray(v) &&
+        v.length === 4 &&
+        v.every((n) => typeof n === 'number' && Number.isFinite(n))
+      ) {
+        kept[k] = v;
+      }
+    }
+    if (Object.keys(kept).length > 0) out[id] = kept;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
+}
+
 function coerceFormat(raw: unknown): BlockFormat | undefined {
   if (!raw || typeof raw !== 'object') return undefined;
   const r = raw as Record<string, unknown>;

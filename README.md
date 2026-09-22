@@ -26,9 +26,9 @@ and a preview pane that this program has never had.
 ## Contents
 
 - [Stack](#stack)
-- [The workspace](#the-workspace) — [command palette](#the-command-palette), [formatting bar](#the-formatting-bar), [export sheet](#the-export-sheet), [library](#the-library), [palettes](#palettes)
+- [The workspace](#the-workspace) — [command palette](#the-command-palette), [formatting bar](#the-formatting-bar), [export sheet](#the-export-sheet), [library](#the-library), [history](#version-history), [styles](#the-styles-editor), [a phone](#a-phone), [palettes](#palettes)
 - [Geometry](#geometry) · [How it works](#how-it-works) · [Pagination](#the-two-pagination-paths) · [Line-level splitting](#line-level-splitting) · [Styles](#styles)
-- [Opening a .docx](#opening-a-docx) — [headings](#headings-when-the-document-does-not-say), [tables](#tables), [sections](#sections), [direct formatting](#direct-paragraph-formatting), [the preservation vault](#the-preservation-vault)
+- [Opening a .docx](#opening-a-docx) — [headings](#headings-when-the-document-does-not-say), [tables](#tables), [sections](#sections), [paragraph formatting](#direct-paragraph-formatting), [character formatting](#direct-character-formatting), [comments](#comments), [the preservation vault](#the-preservation-vault)
 - [Fidelity harness](#fidelity-harness) · [Printing to PDF](#printing-to-pdf) · [.docx export](#docx-export) · [Storage](#storage)
 - [Format independence](#format-independence) · [Not built, on purpose](#not-built-on-purpose) · [Acceptance tests](#acceptance-tests)
 
@@ -141,8 +141,12 @@ has no original would be a lie told at exactly the wrong moment.
 <sub>The FILES tab: type-to-filter, a recency fade down the list, page and word counts kept in the index so nothing has to be loaded to list it, and the one command that gets everything out.</sub>
 
 
-The rail's FILES tab lists every document, newest first, with a type-to-filter
-box and a recency fade down the list. Clicking one opens it; the row menu
+The rail's FILES tab lists every document, newest first, with a recency fade
+down the list. Typing two or more letters searches the **text** of every
+document, not just its title, with a match count and the line the phrase is
+on so you can tell which document it is without opening it. No index: sixty
+documents of six hundred kilobytes is a few milliseconds, and an index that
+can be wrong is worse than a scan that cannot. Clicking one opens it; the row menu
 duplicates or deletes. `New document` and `Browse documents` are in the File
 menu, on Cmd/Ctrl+N and Cmd/Ctrl+O.
 
@@ -159,6 +163,53 @@ Two things this has to get right:
 Deleting a document also deletes the original .docx bytes held for it in
 IndexedDB, and if it was the open one the app lands on the next most recent
 rather than on a document that no longer exists.
+
+### Version history
+
+Every settled save keeps a version, twenty-five per document, in IndexedDB.
+Deliberately **not** localStorage: that is where the documents themselves
+live, and filling it with history would make the thing it protects fail to
+save. Losing history is survivable; failing to save is not — which is also
+why `keepVersion` is never awaited and swallows its own failures.
+
+A version is only kept when it differs from the one before it, so sitting on
+a document does not fill the store with copies of itself. Restoring is an
+edit rather than a rewind: the version you were on is kept, so changing your
+mind costs nothing and one Undo puts it back. The document id survives the
+restore, or it would become a second document in the library.
+
+### The styles editor
+
+The six named styles are the document's own. A resume set in 10pt and a
+report set in 12pt are both right, so the overrides live on the **document**
+— a global preference would be wrong in one of them.
+
+`STYLES` is mutated in place rather than replaced. Everything reads
+`STYLES[id]` directly — the CSS emitter, the style menu, the Enter key, the
+paginator's keep-with-next rules and both exporters — so one table that
+changes is the whole feature, where a second table would be a second source
+of truth to get out of step. A value equal to the shipped one is recorded as
+agreement rather than as an override, so a document fiddled back to the
+default carries no `styles` block at all.
+
+### A phone
+
+The page is 816 CSS pixels wide and has to stay that way: every height the
+paginator compares against is a CSS pixel, so a responsive layout that shrank
+the page would shrink the measurements with it.
+
+So nothing scales the page. The **viewport** is widened instead — the browser
+lays the app out at a fixed 880 and scales the rendered result down to the
+device, as it does for any fixed-width page. Measurement is untouched, the
+caret lands where it looks like it should, and print still matches the screen
+because the screen is still 816 pixels of paper. The rail becomes a drawer;
+the document map and the gutter page numbers go, because they are for a mouse
+and a wide window; the readout stays, because it is the only thing that says
+where you are.
+
+Mobile is a coarse pointer **and** a narrow screen. Either alone is the wrong
+test: a touchscreen laptop has a coarse pointer and plenty of room, and a
+narrow window on a desktop belongs to someone who can widen it.
 
 ### Palettes
 
@@ -215,6 +266,11 @@ All geometry is in CSS pixels at 96px per inch, and the numbers are exact.
 | `main.ts` | entry, toolbar composition, event wiring, autosave |
 | `ui.ts` | control widgets: buttons and dropdown menus |
 | `commandbar.ts` | the command palette |
+| `ask.ts` | one question, one answer |
+| `insert.ts` | making tables, images, links and page breaks |
+| `runs.ts` | character formatting: read, drawn, edited |
+| `versions.ts` | version history, in IndexedDB |
+| `mobile.ts` | the phone layout |
 | `formatbar.ts` | the formatting bar over a selection |
 | `exportsheet.ts` | the export sheet, and what each format costs |
 | `theme.ts` | the twelve palettes, as ten tokens each |
@@ -555,6 +611,52 @@ on Word's own `Ctrl+L`/`E`/`R`/`J`, which is why the export sheet moved to
 **Paragraph** menu and in the command palette, along with *Clear direct
 formatting*, which takes a paragraph back to its named style.
 
+### Direct character formatting
+
+14,865 of 18,906 runs in a 63-document corpus carry a size, a font or a
+colour of their own — **79%**, against the 47% that carry paragraph
+formatting. None of it was drawn, and there was a live data bug underneath:
+the vault kept **one** base `w:rPr` per paragraph and wrote it onto every
+regenerated run, so editing a line with one red word in it made the whole
+line red. Only untouched paragraphs were safe, which is exactly why a
+harness built on byte-identity never saw it.
+
+Runs carry their own style **absolutely** rather than as a difference from a
+paragraph base. The difference was tried first and reproduced the bug from
+the other end: a base taken from the first run with any properties made
+every plain run inherit that run's colour, and there is no way to spell
+"explicitly none". Absolute values have no inheritance to get wrong, survive
+a JSON round trip with no vault to consult, and cost almost nothing in
+markup, because adjacent pieces that agree are merged before the html is
+written — a paragraph whose every run is 14pt becomes one span, not one per
+run.
+
+Stored as data attributes on a span, never as a `style` attribute: the CSS
+is derived at render, so the sanitizer keeps a closed attribute list and
+nothing from the clipboard can smuggle a style into a saved document.
+Superscript is drawn as a smaller font on a raised baseline rather than
+`<sup>`, which would change the line box height and make a line taller than
+the paginator measured it.
+
+### Comments
+
+Not one document in the corpus has a comment in it, which is exactly why
+this needed doing: `w:commentRangeStart` fell through the inline walker's
+default case, so editing the words around a comment left it pointing at
+nothing, and nothing in that corpus would ever have caught it.
+
+Anchors are carried through the model as empty marker spans — the shape a
+page-number field already used, marking a position rather than holding text,
+so the caret counts exactly the characters it counted before. They are
+written back as `w:commentRangeStart`, `w:commentRangeEnd` and a
+`w:commentReference` inside a run, which is where the schema wants it.
+
+Comments are shown, not authored: author, initials, date and text are read
+from `word/comments.xml` and listed under the outline, because a document
+with comments on it is being reviewed and the comments and the headings
+answer the same question. The part is preserved whole, so a reply written in
+Word survives a round trip through here.
+
 ### The preservation vault
 
 The original package is kept in memory. On export only the body of
@@ -597,8 +699,24 @@ Two honest limits:
 
 ```bash
 npm run corpus   # write a seed corpus into test/corpus
-npm test         # inference, tables and the round trip
+npm test         # every suite, then the round trip
 ```
+
+| Suite | What it pins down |
+|---|---|
+| `test:infer` | headings, when the document does not say |
+| `test:table` | editing a cell survives export |
+| `test:image` | pictures come back whole |
+| `test:header` | headers, footers and page-number fields |
+| `test:section` | per-section geometry and headers |
+| `test:format` | alignment, indents and spacing, in schema order |
+| `test:run` | character formatting, and the flattening bug |
+| `test:insert` | new links, images and page breaks, added not overwritten |
+| `test:comment` | comment anchors survive an edit |
+| `test:text` | Markdown and HTML out, Markdown back in |
+| `test:roundtrip` | every part, byte for byte |
+| `test:pagination` | our page breaks against Word's own count |
+| `test:perf` | a keystroke inside a frame at any size |
 
 For each document it asserts that every part survives, that **non-document
 parts are byte-identical**, that text content and paragraph, table, numbering,
@@ -754,14 +872,15 @@ problem Markdown and .docx do not already solve here.
   and edited; one that arrives on the clipboard is not.
 - **A continuous section break.** It shares a page with the section before
   it, and a page has one geometry, so it folds into that section instead.
-- **Direct character formatting.** Paragraphs can be aligned, indented and
-  spaced, but there is still no font family, size or colour control: a run is
-  bold, italic, underlined, or it is whatever its named style says. Imported
-  run formatting is preserved on export and shown as the style renders it.
-- **Creating** a table or inserting an image. Both are read, drawn and edited
-  when they arrive in a .docx; neither can be made from nothing.
+- **Authoring comments.** They are read, anchored and shown; there is no way
+  to write one. Replies made in Word survive a round trip through here.
+- **Tracked changes** are shown as accepted and preserved on export. There is
+  no way to see them as changes, accept one or reject one.
+- **Highlight, small capitals and character styles.** Size, font, colour,
+  strikethrough and super/subscript are editable; the rest of `w:rPr` is
+  preserved and drawn as the named style renders it.
 - Columns, text boxes, footnotes, PDF import, collaboration, spell check
-  beyond the browser's own, mobile layout, any backend.
+  beyond the browser's own, any backend.
 
 Undo granularity is coarser than Word's: typing coalesces into one entry per
 500ms of activity, and each structural change is one entry.
@@ -802,5 +921,12 @@ Run these in order; all pass as of the last change.
 11. **Export match** — the .docx carries all six named styles, bold/italic/
     underline, hyperlinks, line breaks, bullet numbering, 8.5×11in page size
     and the right margins, with no forced page breaks.
-12. **Performance** — on a 10-page document the input handler runs at ~0.5ms
-    median and under 2ms at p99, whether typing on page 1 or page 10.
+12. **Performance** — `npm run test:perf` builds a document of any size and
+    measures a real keystroke in a real browser. At 200 pages and 2,701
+    blocks a keystroke is 4ms median and 8.3ms at p99, inside a frame
+    wherever in the document it lands. It was 14.7ms at eighty pages until
+    the gutter and the document map stopped rebuilding themselves on every
+    keystroke — the pagination was never the problem; the chrome was.
+13. **Pagination against Word** — `npm run test:pagination` compares our page
+    count with the one Word recorded in `docProps/app.xml`. On 36 documents
+    that carry one: 21 exact, 13 within a page, 2 further out.

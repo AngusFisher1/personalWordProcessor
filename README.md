@@ -625,6 +625,27 @@ node test/roundtrip.mjs "/path/to/your/documents"
 See `test/corpus/README.md`. The seed corpus is synthetic and is a floor, not
 the corpus.
 
+### Does our pagination agree with Word's?
+
+Byte-identity proves the file comes back unchanged. It says nothing about
+whether the pages break where Word breaks them, which is the other half of
+what this program claims.
+
+Every .docx Word saves records its page count at that moment in
+`docProps/app.xml`. 52 of 63 documents in a real corpus carry one. That is
+ground truth from the program we are replacing, sitting inside files we
+already have, needing neither Word nor LibreOffice to read:
+
+```bash
+npm run dev                 # in another terminal
+npm i -D playwright-core    # not a project dependency
+npm run test:pagination -- "/path/to/your/documents"
+```
+
+It drives the real app in a real browser, because pagination is measurement
+and nothing in Node has a height. Only Word's own number counts - other
+producers copy the field across without recomputing it.
+
 Two notes on what the assertions mean:
 
 - Text is compared with entities decoded. A parser legitimately rewrites

@@ -315,6 +315,8 @@ export interface Doc2Extras {
    * `{ Body: { size: 12 }, … }`; anything absent is the shipped value.
    */
   styles?: Record<string, Record<string, unknown>>;
+  /** Comments read from word/comments.xml, by their OOXML id. */
+  comments?: Comment[];
   /**
    * Sections, when the document has more than one. Absent means one section
    * with `page`, `headers` and `footers`, which is what most documents are
@@ -466,6 +468,25 @@ export function paragraphsOf(blocks: Block[]): ParagraphBlock[] {
     }
   }
   return out;
+}
+
+/**
+ * A comment, as the file records it.
+ *
+ * Not one document in a 63-file corpus had any, so this is not built for
+ * volume. It is built because the anchors used to be dropped: a paragraph
+ * with a comment on it lost its w:commentRangeStart the moment anybody
+ * edited the words, and the comment then pointed at nothing. Silent loss is
+ * the one thing this program is supposed not to do.
+ */
+export interface Comment {
+  /** The w:id the ranges refer to. */
+  id: string;
+  author: string;
+  initials: string;
+  date: string;
+  /** Plain text; comments are shown, not edited. */
+  text: string;
 }
 
 export interface Doc extends Doc2Extras {

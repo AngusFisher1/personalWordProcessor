@@ -6,6 +6,7 @@ import type {
   HFVariant,
   HeaderFooterSet,
   PageSetup,
+  Comment,
   ParagraphBlock,
   RunStyle,
   Section,
@@ -155,6 +156,7 @@ interface Fmt {
 type Piece =
   | ({ t: 'text'; text: string; href: string | null; rs?: RunStyle } & Fmt)
   | { t: 'br' }
+  | { t: 'cmt'; kind: 'start' | 'end' | 'ref'; id: string }
   | { t: 'img'; media: string; run: string; w: number; h: number }
   | { t: 'field'; name: string };
 
@@ -296,6 +298,11 @@ function emitRun(r: Element, fmt: Fmt, href: string | null, out: Piece[], ctx: C
         }
         break;
       }
+      case 'commentReference': {
+        const cid = wAttr(c, 'id');
+        if (cid) out.push({ t: 'cmt', kind: 'ref', id: cid });
+        break;
+      }
       case 'delText':
         break; // deleted text is not part of the current document
       default:
@@ -342,6 +349,16 @@ function walkInline(
         else walkInline(c, fmt, href, out, ctx); // keep its cached text
         break;
       }
+      case 'commentRangeStart':
+      case 'commentRangeEnd': {
+        // Kept as a marker in the markup so that editing the words around a
+        // comment does not leave the comment pointing at nothing.
+        const id = wAttr(c, 'id');
+        if (id) {
+          out.push({ t: 'cmt', kind: c.localName === 'commentRangeStart' ? 'start' : 'end', id });
+        }
+        break;
+      }
       case 'sdtContent':
       case 'smartTag':
         walkInline(c, fmt, href, out, ctx);
@@ -379,6 +396,10 @@ function piecesToHtml(pieces: Piece[]): string {
   for (const p of merged) {
     if (p.t === 'br') {
       html += '<br>';
+      continue;
+    }
+    if (p.t === 'cmt') {
+      html += `<span data-cmt="${escapeAttr(p.kind)}" data-cmt-id="${escapeAttr(p.id)}"></span>`;
       continue;
     }
     if (p.t === 'field') {
@@ -829,6 +850,38 @@ export function readParagraphFormat(pPr: Element | null): BlockFormat | undefine
   return tidyFormat(f);
 }
 
+/**
+ * Read word/comments.xml.
+ *
+ * Text only: comments are shown here, never authored, so the markup inside
+ * one is flattened rather than carried. The part itself is preserved whole
+ * like every other, so nothing is lost on the way back out.
+ */
+function readComments(xml: string | null): Comment[] {
+  if (!xml) return [];
+  const doc = new DOMParser().parseFromString(xml, 'application/xml');
+  const root = doc.documentElement;
+  if (!root) return [];
+  const out: Comment[] = [];
+  for (const c of kids(root, 'comment')) {
+    const id = wAttr(c, 'id');
+    if (!id) continue;
+    let text = '';
+    for (const p of kids(c, 'p')) {
+      const line = (p.textContent ?? '').trim();
+      if (line !== '') text += (text ? '\n' : '') + line;
+    }
+    out.push({
+      id,
+      author: wAttr(c, 'author') ?? '',
+      initials: wAttr(c, 'initials') ?? '',
+      date: wAttr(c, 'date') ?? '',
+      text,
+    });
+  }
+  return out;
+}
+
 /* ------------------------------------------------------------------ *
  * Section properties
  * ------------------------------------------------------------------ */
@@ -941,6 +994,7 @@ export async function importDocx(
     themeFont(partText(parts, 'word/theme/theme1.xml'))
   );
   const numbering = readNumbering(partText(parts, 'word/numbering.xml'));
+  const comments = readComments(partText(parts, 'word/comments.xml'));
   const rels = readRels(partText(parts, 'word/_rels/document.xml.rels'));
   for (const [id, target] of rels) {
     if (!vault.relByTarget.has(target)) vault.relByTarget.set(target, id);
@@ -1355,6 +1409,7 @@ export async function importDocx(
     headerDistance,
     footerDistance,
     ...(defaultFont ? { defaultFont } : {}),
+    ...(comments.length > 0 ? { comments } : {}),
   };
 
   return { doc, vault };

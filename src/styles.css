@@ -1071,6 +1071,40 @@ body.col-resizing { user-select: none; }
   color: var(--dim);
 }
 
+
+/* ---------- comments, under the outline ---------- */
+.cmt-label { margin: 16px 16px 4px; }
+.cmt-row {
+  padding: 7px 16px 9px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+}
+.cmt-row:hover { background: var(--panel); border-left-color: var(--acc); }
+.cmt-who { display: flex; align-items: center; gap: 6px; }
+.cmt-badge {
+  flex: none;
+  padding: 1px 4px;
+  border-radius: 6px;
+  background: var(--line);
+  color: var(--hi);
+  font-family: var(--mono);
+  font-size: 8px;
+}
+.cmt-author { font: 11px var(--ui); color: var(--mid); }
+.cmt-when {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 8.5px;
+  color: var(--dim);
+}
+.cmt-text {
+  padding-top: 3px;
+  font: 11px var(--ui);
+  line-height: 1.45;
+  color: var(--dim);
+  white-space: pre-wrap;
+}
+
 @page { size: letter; margin: 0; }
 
 @media print {

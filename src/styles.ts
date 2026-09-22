@@ -493,6 +493,32 @@ export function applyBlockFormat(
   }
 }
 
+/**
+ * Comment anchors.
+ *
+ * The reference is drawn as a small superscript mark and the range gets a
+ * tint, so a commented passage is visible without a margin rail fighting
+ * the gutter for space. The marks are zero-width in the text, so the caret
+ * counts the same characters it always did.
+ */
+const COMMENT_CSS = `
+.blk [data-cmt] { display: inline; }
+.blk [data-cmt="ref"]::after {
+  content: attr(data-cmt-id);
+  display: inline-block;
+  margin-left: 1px;
+  padding: 0 3px;
+  border-radius: 6px;
+  background: ${RULE_COLOR};
+  color: #fff;
+  font-family: var(--ui);
+  font-size: 8px;
+  vertical-align: 0.45em;
+  cursor: pointer;
+}
+.blk.has-comment { background: rgba(217, 123, 60, 0.07); }
+`;
+
 export function injectStyleSheet(): void {
   emitStyleSheet();
 }
@@ -514,5 +540,6 @@ function emitStyleSheet(): void {
     IMAGE_CSS +
     FIND_CSS +
     HF_CSS +
+    COMMENT_CSS +
     SPLIT_CSS;
 }

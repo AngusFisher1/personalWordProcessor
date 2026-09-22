@@ -80,6 +80,7 @@ export function setBlockHtml(el: HTMLElement, html: string): void {
   el.innerHTML = html.trim() === '' ? '<br>' : html;
   resolveImages(el);
   resolveRuns(el);
+  el.classList.toggle('has-comment', !!el.querySelector('[data-cmt]'));
 }
 
 /**
@@ -516,6 +517,16 @@ export function cleanInline(parent: Node, opts: CleanOptions = {}): void {
     const el = n as HTMLElement;
     const tag = el.tagName;
 
+    if (tag === 'SPAN' && el.hasAttribute('data-cmt')) {
+      // A comment anchor. Empty, like a field: it marks a position rather
+      // than carrying text, and dropping it would leave the comment in
+      // word/comments.xml pointing at nothing.
+      for (const a of Array.from(el.attributes)) {
+        if (a.name !== 'data-cmt' && a.name !== 'data-cmt-id') el.removeAttribute(a.name);
+      }
+      el.textContent = '';
+      continue;
+    }
     if (tag === 'SPAN' && el.hasAttribute('data-field') && opts.allowImages) {
       // A field token. Its text is a render-time value, so it is emptied on
       // the way to the model - storing "Page 3 of 12" would freeze it.

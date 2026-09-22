@@ -407,6 +407,37 @@ export function updateRail(
   }
 }
 
+/**
+ * Comments, under the outline.
+ *
+ * Not a third tab: a document with comments on it is being reviewed, and
+ * while it is, the comments and the headings are the same question - where
+ * in this document do I need to be.
+ */
+function renderComments(doc: Doc, box: HTMLElement): void {
+  const comments = doc.comments ?? [];
+  if (comments.length === 0) return;
+  box.appendChild(el('div', 'rail-label cmt-label', comments.length + ' COMMENTS'));
+  for (const c of comments) {
+    const row = el('div', 'cmt-row');
+    const who = el('div', 'cmt-who');
+    who.append(
+      el('span', 'cmt-badge', c.initials || String(c.id)),
+      el('span', 'cmt-author', c.author || 'Unknown'),
+      el('span', 'cmt-when', c.date ? c.date.slice(0, 10) : '')
+    );
+    row.append(who, el('div', 'cmt-text', c.text));
+    row.addEventListener('mousedown', (ev) => ev.preventDefault());
+    row.addEventListener('click', () => {
+      const anchor = document.querySelector(
+        `#doc [data-cmt-id="${CSS.escape(c.id)}"]`
+      ) as HTMLElement | null;
+      anchor?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    });
+    box.appendChild(row);
+  }
+}
+
 /** Headings, in document order, as a clickable outline. */
 export function updateOutline(doc: Doc, activeId: string | null): void {
   const box = ui.outline;
@@ -427,6 +458,7 @@ export function updateOutline(doc: Doc, activeId: string | null): void {
     empty.innerHTML =
       'NO HEADINGS YET<br>HEADINGS APPEAR HERE<br>AS YOU WRITE';
     box.appendChild(empty);
+    renderComments(doc, box);
     return;
   }
 
@@ -439,6 +471,7 @@ export function updateOutline(doc: Doc, activeId: string | null): void {
     row.addEventListener('click', () => hooks?.onOutlineClick(e.id));
     box.appendChild(row);
   }
+  renderComments(doc, box);
 }
 
 /* ------------------------------------------------------------------ *

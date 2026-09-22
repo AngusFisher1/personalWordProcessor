@@ -455,6 +455,78 @@ async function runFormat() {
   );
 }
 
+/* ---------------- 7e. comments ---------------- */
+/**
+ * Not one document in the real corpus has a comment in it, which is exactly
+ * why this exists: the anchors used to be dropped on the first edit, and
+ * nothing in the corpus would ever have caught it.
+ *
+ * Written by hand, because the docx library does not emit comments.
+ */
+async function comments() {
+  const doc = new Document({
+    sections: [
+      {
+        children: [
+          new Paragraph({ text: 'Reviewed Draft', heading: HeadingLevel.HEADING_1 }),
+          para('The first paragraph carries a comment across part of it. ' + lorem),
+          para('The second one is plain. ' + lorem),
+          para('The third carries a second comment. ' + lorem),
+        ],
+      },
+    ],
+  });
+  const buf = await Packer.toBuffer(doc);
+  const zip = await JSZip.loadAsync(buf);
+
+  let xml = await zip.file('word/document.xml').async('string');
+  const paras = xml.match(/<w:p [\s\S]*?<\/w:p>|<w:p>[\s\S]*?<\/w:p>/g) ?? [];
+  const anchored = (p, id) =>
+    p
+      .replace(/(<w:p[^>]*>)/, `$1<w:commentRangeStart w:id="${id}"/>`)
+      .replace(
+        /<\/w:p>$/,
+        `<w:commentRangeEnd w:id="${id}"/>` +
+          `<w:r><w:commentReference w:id="${id}"/></w:r></w:p>`
+      );
+  xml = xml.replace(paras[1], anchored(paras[1], '1'));
+  xml = xml.replace(paras[3], anchored(paras[3], '2'));
+  zip.file('word/document.xml', xml);
+
+  const W = 'http://schemas.openxmlformats.org/wordprocessingml/2006/main';
+  const comment = (id, author, initials, text) =>
+    `<w:comment w:id="${id}" w:author="${author}" w:initials="${initials}"` +
+    ` w:date="2026-03-14T10:00:00Z"><w:p><w:r><w:t>${text}</w:t></w:r></w:p></w:comment>`;
+  zip.file(
+    'word/comments.xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>` +
+      `<w:comments xmlns:w="${W}">` +
+      comment('1', 'Dana Whitfield', 'DW', 'Can we tighten this opening?') +
+      comment('2', 'Miriam Okonkwo', 'MO', 'Agreed. Also check the figure.') +
+      '</w:comments>'
+  );
+
+  let rels = await zip.file('word/_rels/document.xml.rels').async('string');
+  rels = rels.replace(
+    /<\/Relationships>/,
+    '<Relationship Id="rIdComments" Type="http://schemas.openxmlformats.org/' +
+      'officeDocument/2006/relationships/comments" Target="comments.xml"/></Relationships>'
+  );
+  zip.file('word/_rels/document.xml.rels', rels);
+
+  let ct = await zip.file('[Content_Types].xml').async('string');
+  ct = ct.replace(
+    /<\/Types>/,
+    '<Override PartName="/word/comments.xml" ContentType="application/vnd.' +
+      'openxmlformats-officedocument.wordprocessingml.comments+xml"/></Types>'
+  );
+  zip.file('[Content_Types].xml', ct);
+
+  const out = await zip.generateAsync({ type: 'nodebuffer' });
+  await writeFile(join(OUT, 'comments.docx'), out);
+  console.log('  comments.docx  ' + out.length + ' bytes');
+}
+
 /* ---------------- 8. hyperlinks and unusual font ---------------- */
 async function links() {
   await save(
@@ -662,6 +734,7 @@ await letterhead();
 await twoSections();
 await directFormat();
 await runFormat();
+await comments();
 await links();
 await withImages();
 await directResume();

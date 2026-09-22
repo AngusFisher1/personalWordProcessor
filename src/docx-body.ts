@@ -218,6 +218,17 @@ function runsXml(html: string, vault: Vault, base?: RunProp[]): string {
       }
       if (n.nodeType !== ELEMENT_NODE) continue;
       const el = n as Element;
+      const cmt = el.getAttribute('data-cmt');
+      if (cmt) {
+        const cid = escAttr(el.getAttribute('data-cmt-id') ?? '');
+        out +=
+          cmt === 'start'
+            ? `<w:commentRangeStart w:id="${cid}"/>`
+            : cmt === 'end'
+              ? `<w:commentRangeEnd w:id="${cid}"/>`
+              : `<w:r><w:commentReference w:id="${cid}"/></w:r>`;
+        continue;
+      }
       if (el.tagName.toUpperCase() === 'SPAN' && isRunSpan(el)) {
         // Character formatting, stored as the difference from the
         // paragraph's base run properties. Nested spans merge outward-in.

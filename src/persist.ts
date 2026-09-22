@@ -9,7 +9,7 @@ import type {
   Section,
   TableBlock,
 } from './model';
-import { MARGINS, isStyleId, newId, pageSetup, tidyFormat } from './model';
+import { MARGINS, isStyleId, isTable, newId, pageSetup, plainText, tidyFormat } from './model';
 
 const INDEX_KEY = 'wp:docs';
 const LAST_KEY = 'wp:last';
@@ -64,6 +64,99 @@ export function readIndex(): IndexEntry[] {
   } catch {
     return [];
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * Searching the library
+ * ------------------------------------------------------------------ */
+
+/** Above this, the count is reported as "many" rather than counted out. */
+export const MATCH_CAP = 500;
+
+export interface LibraryHit {
+  id: string;
+  title: string;
+  updatedAt: number;
+  /** How many times the query appears in the text. */
+  count: number;
+  /** A window of text around the first one. */
+  snippet: string;
+  /** True when the title matched, which ranks above a body match. */
+  inTitle: boolean;
+}
+
+/** The readable text of a document, for searching and for snippets. */
+function documentText(doc: Doc): string {
+  const parts: string[] = [];
+  for (const b of doc.blocks) {
+    if (isTable(b)) {
+      for (const row of b.rows) {
+        for (const cell of row.cells) for (const p of cell) parts.push(plainText(p.html));
+      }
+    } else {
+      parts.push(plainText(b.html));
+    }
+  }
+  return parts.join(' · ').replace(/\s+/g, ' ');
+}
+
+/**
+ * Find a phrase across every document.
+ *
+ * Reads each document out of storage and searches its text. Sixty documents
+ * of six hundred kilobytes is a few milliseconds, so there is no index to
+ * build and therefore no index to keep correct - and an index that can be
+ * wrong is worse than a scan that cannot.
+ */
+export function searchLibrary(query: string, limit = 40): LibraryHit[] {
+  const q = query.trim().toLowerCase();
+  if (q.length < 2) return [];
+  const out: LibraryHit[] = [];
+
+  for (const entry of readIndex()) {
+    const inTitle = entry.title.toLowerCase().includes(q);
+    const doc = loadById(entry.id);
+    let count = 0;
+    let snippet = '';
+    if (doc) {
+      const text = documentText(doc);
+      const hay = text.toLowerCase();
+      let at = hay.indexOf(q);
+      const first = at;
+      // Counting stops at the cap: past a few hundred the number stops
+      // meaning anything, and the scan is per document.
+      while (at !== -1 && count < MATCH_CAP) {
+        count++;
+        at = hay.indexOf(q, at + q.length);
+      }
+      if (first !== -1) {
+        const from = Math.max(0, first - 40);
+        const to = Math.min(text.length, first + q.length + 60);
+        snippet =
+          (from > 0 ? '…' : '') +
+          text.slice(from, to).trim() +
+          (to < text.length ? '…' : '');
+      }
+    }
+    if (count === 0 && !inTitle) continue;
+    out.push({
+      id: entry.id,
+      title: entry.title,
+      updatedAt: entry.updatedAt,
+      count,
+      snippet,
+      inTitle,
+    });
+  }
+
+  // A title match first, then the most mentions, then the most recent.
+  out.sort(
+    (a, b) =>
+      Number(b.inTitle) - Number(a.inTitle) ||
+      b.count - a.count ||
+      b.updatedAt - a.updatedAt
+  );
+  return out.slice(0, limit);
 }
 
 export function load(): Doc | null {

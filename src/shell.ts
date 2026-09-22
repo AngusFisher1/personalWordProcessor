@@ -5,6 +5,7 @@ import { docEl, pages } from './render';
 import { styleOf } from './styles';
 import { currentPageSetup, pageCount } from './paginate';
 import type { IndexEntry } from './persist';
+import { MATCH_CAP, searchLibrary } from './persist';
 import { openMenuAt } from './ui';
 
 /**
@@ -190,9 +191,17 @@ function renderFiles(): void {
   const list = ui.fileList;
   if (!list) return;
   const q = (ui.filter?.value ?? '').trim().toLowerCase();
-  const shown = q
-    ? library.filter((e) => e.title.toLowerCase().includes(q))
-    : library;
+
+  // Two letters is where searching the text of every document starts being
+  // worth the read. Below that the filter is a filter, on titles only.
+  const hits = q.length >= 2 ? searchLibrary(q) : null;
+  const byId = new Map(library.map((e) => [e.id, e]));
+  const shown = hits
+    ? hits.map((h) => byId.get(h.id)).filter((e): e is IndexEntry => !!e)
+    : q
+      ? library.filter((e) => e.title.toLowerCase().includes(q))
+      : library;
+  const hitById = new Map((hits ?? []).map((h) => [h.id, h]));
 
   list.textContent = '';
 
@@ -210,14 +219,33 @@ function renderFiles(): void {
 
     const tick = el('span', 'outline-tick');
     const body = el('div', 'file-body');
+    const hit = hitById.get(e.id);
     body.append(
       el('div', 'file-title', e.title || 'Untitled'),
       el(
         'div',
         'file-meta',
-        `${e.pages} PP · ${e.words} W · ${ago(e.updatedAt)}`
+        hit && hit.count > 0
+          ? `${hit.count >= MATCH_CAP ? MATCH_CAP + '+' : hit.count} ` +
+            `MATCH${hit.count === 1 ? '' : 'ES'} · ${e.pages} PP · ${ago(e.updatedAt)}`
+          : `${e.pages} PP · ${e.words} W · ${ago(e.updatedAt)}`
       )
     );
+    // The line the phrase is on, so you can tell which document this is
+    // without opening it.
+    if (hit?.snippet) {
+      const snip = el('div', 'file-snippet');
+      const at = hit.snippet.toLowerCase().indexOf(q);
+      if (at < 0) snip.textContent = hit.snippet;
+      else {
+        snip.append(
+          document.createTextNode(hit.snippet.slice(0, at)),
+          el('mark', 'file-mark', hit.snippet.slice(at, at + q.length)),
+          document.createTextNode(hit.snippet.slice(at + q.length))
+        );
+      }
+      body.appendChild(snip);
+    }
 
     const more = document.createElement('button');
     more.className = 'file-more';

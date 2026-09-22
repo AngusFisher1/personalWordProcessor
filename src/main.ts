@@ -92,6 +92,8 @@ import { importDocx } from './docx-import';
 import type { MenuItem } from './ui';
 import { closeMenu, iconButton, menuButton, openMenuAt, textButton } from './ui';
 import { ask } from './ask';
+import type { Version } from './versions';
+import { forgetVersions, keepVersion, listVersions, whenLabel } from './versions';
 import {
   imageHtml,
   insertTableAtCaret,
@@ -144,6 +146,7 @@ const ui = {
   text: null as ReturnType<typeof menuButton> | null,
   styles: null as ReturnType<typeof menuButton> | null,
   insert: null as ReturnType<typeof menuButton> | null,
+  history: null as ReturnType<typeof menuButton> | null,
   hf: null as HTMLButtonElement | null,
   palette: null as ReturnType<typeof menuButton> | null,
   title: null as HTMLInputElement | null,
@@ -293,6 +296,31 @@ function buildToolbar(host: HTMLElement): void {
     'tb-style'
   );
   host.appendChild(ui.style.el);
+
+  ui.history = menuButton('History', 'Earlier saves of this document', () => {
+    if (versionCache.length === 0) {
+      return [{ heading: 'No earlier saves yet' }];
+    }
+    return [
+      { heading: versionCache.length + ' saved versions' },
+      ...versionCache.slice(0, 20).map((v) => ({
+        label: whenLabel(v.savedAt),
+        note: v.words + ' w',
+        onSelect: () => restoreVersion(v),
+      })),
+      { separator: true },
+      {
+        label: 'Forget this history',
+        onSelect: () => {
+          void forgetVersions(doc.id).then(() => {
+            versionCache = [];
+            flashRail('HISTORY CLEARED');
+          });
+        },
+      },
+    ];
+  });
+  host.appendChild(ui.history.el);
 
   ui.insert = menuButton('Insert', 'Table, image, link and page break', () => [
     { heading: 'Table' },
@@ -506,6 +534,11 @@ function flushSave(): void {
   saveTimer = 0;
   syncModel();
   save(doc, docMeta());
+  // History is a luxury on top of the save, never a condition of it: this
+  // is deliberately not awaited and its failures are its own. The list is
+  // refreshed behind it so the menu is populated before it is opened -
+  // a menu that builds its own rows cannot wait for a promise.
+  void keepVersion(doc).then(refreshVersions);
 }
 
 function docMeta(): { words: number; pages: number } {
@@ -554,6 +587,7 @@ function duplicate(id: string): void {
 }
 
 function remove(id: string): void {
+  void forgetVersions(id);
   const entry = readIndex().find((e) => e.id === id);
   const name = entry?.title || 'this document';
   if (!confirm(`Delete "${name}"? This cannot be undone.`)) return;
@@ -906,6 +940,7 @@ export async function openDocxFile(file: File): Promise<void> {
     // vault that makes the round trip faithful.
     void saveOriginal(imported.id, bytes);
     save(doc, docMeta());
+    void keepVersion(doc).then(refreshVersions);
     refreshLibrary();
     showWarnings(v);
   } catch (err) {
@@ -1079,6 +1114,40 @@ function showExportSheet(): void {
     ],
     doc.title || 'Untitled'
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * History
+ * ------------------------------------------------------------------ */
+
+let versionCache: Version[] = [];
+
+async function refreshVersions(): Promise<void> {
+  versionCache = await listVersions(doc.id);
+}
+
+/**
+ * Go back to an earlier save.
+ *
+ * Restoring is itself an edit rather than a rewind: the version you were on
+ * is kept, so changing your mind about changing your mind costs nothing,
+ * and one Undo puts it back.
+ */
+function restoreVersion(v: Version): void {
+  try {
+    const restored = importJson(v.json);
+    // The id stays, or it becomes a different document in the library.
+    restored.id = doc.id;
+    doc = restored;
+    openDoc(doc);
+    snapshot('structural');
+    save(doc, docMeta());
+    refreshLibrary();
+    flashRail('RESTORED ' + whenLabel(v.savedAt).toUpperCase());
+  } catch (err) {
+    flashRail('COULD NOT RESTORE', true);
+    alert('That version could not be read: ' + (err as Error).message);
+  }
 }
 
 /* ------------------------------------------------------------------ *
@@ -1474,6 +1543,7 @@ function openDoc(d: Doc): void {
   setPageSetup(d.page);
   if (ui.title) ui.title.value = d.title;
   lastWords = -1;
+  void refreshVersions();
   setHeaderFooterSpace((i) => hfSpace(doc, hfHeights, i, sectionOfPage(pages()[i])));
   installSections(doc);
   renderAll(doc, docEl());

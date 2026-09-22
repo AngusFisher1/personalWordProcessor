@@ -251,6 +251,24 @@ html, body {
 .file-row:hover .file-more { opacity: 1; }
 .file-more:hover { color: var(--hi); background: var(--bg); }
 
+/* The line a library search matched on, so you can tell which document
+   this is without opening it. */
+.file-snippet {
+  padding-top: 4px;
+  font: 10.5px var(--ui);
+  line-height: 1.4;
+  color: var(--dim);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.file-mark {
+  background: transparent;
+  color: var(--acc);
+  font-weight: 600;
+}
+
 .files-foot {
   flex: none;
   margin: 0 16px;

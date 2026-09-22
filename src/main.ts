@@ -123,7 +123,8 @@ import {
   setRecent,
 } from './registry';
 import { loadUiState, setUiState, uiState } from './uistate';
-import { bindFormatBar, hideFormatBar } from './formatbar';
+import { bindFormatBar, renderFormatBar, syncFormatBar } from './formatbar';
+import { bindBubble, hideBubble } from './bubble';
 import { closeExportSheet, isExportSheetOpen, openExportSheet } from './exportsheet';
 import { toHtml, toMarkdown } from './export-text';
 import { fromMarkdown } from './import-md';
@@ -393,6 +394,7 @@ function syncModel(): void {
  * to the counts and the chrome.
  */
 function updateToolbar(): void {
+  syncFormatBar();
   updateCounts();
   refreshChrome();
 }
@@ -1151,7 +1153,7 @@ function openDoc(d: Doc): void {
   if (isFindOpen()) closeFind();
   if (isCommandsOpen()) closeCommands();
   if (isExportSheetOpen()) closeExportSheet();
-  hideFormatBar();
+  hideBubble();
   doc = d;
   // Font before geometry: setPageSetup clears the height cache, and every
   // cached height was measured in whatever family was set at the time.
@@ -1355,18 +1357,20 @@ function boot(): void {
     setUiState({ recent: recentIds() });
   });
 
-  bindFormatBar({
+  bindFormatBar(() => updateToolbar());
+  renderFormatBar();
+  bindBubble({
     bold: () => toggleInline('bold'),
     italic: () => toggleInline('italic'),
     underline: () => toggleInline('underline'),
-    setStyle: (id) => setBlockStyle(id),
-    currentStyle,
+    clearFormatting: () => {
+      setRunStyle({ size: null, font: null, color: null, strike: null, vert: null });
+      clearBlockFormat();
+    },
     inlineState,
-    setAlign: (align) => setBlockFormat({ align }),
-    currentFormat,
     // Header editing and the palette both move the selection somewhere the
-    // bar has no business formatting.
-    suppressed: () => isEditingHF() || isCommandsOpen(),
+    // bubble has no business formatting.
+    suppressed: () => isEditingHF() || isCommandsOpen() || isAskOpen(),
   });
 
   document.addEventListener('wp:changed', () => {

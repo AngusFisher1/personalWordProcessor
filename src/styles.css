@@ -1197,34 +1197,39 @@ body.is-mobile .drawer-toggle {
 body.is-mobile .spine,
 body.is-mobile .gutter-num,
 body.is-mobile .gutter-lead { display: none; }
-body.is-mobile #canvas { padding-left: 0; padding-right: 0; }
-body.is-mobile .readout { left: 12px; bottom: 10px; }
-
-/* A touch target of forty pixels, at a viewport the browser is scaling
-   down: the rail's own controls are designed for a pointer. */
-body.is-mobile .rail-btn,
-body.is-mobile .file-row,
-body.is-mobile .outline-row { min-height: 40px; }
-
-@page { size: letter; margin: 0; }
-
-@media print {
-  html, body { overflow: visible; background: #fff; height: auto; }
-  #rail, #measure, #banner, .menu, .gutter, .spine, #statusbar, #inspector,
-  .cmd-scrim, .formatbar, .xs-scrim,
-  .drawer-toggle, .drawer-scrim { display: none; }
-  #app, #canvas, #doc {
-    margin: 0;
-    padding: 0;
-    display: block;
-    height: auto;
-    overflow: visible;
-  }
-  .page {
-    box-shadow: none;
-    margin: 0;
-    break-after: page;
-    page-break-after: always;
-  }
-  .page:last-child { break-after: auto; page-break-after: auto; }
+body.is-mobile #canvas {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
 }
+
+/* ---------- the format bar ----------
+   Exactly the page's width and aligned with it, because it acts on what is
+   on the page; a bar wider than the paper reads as part of the window. It
+   sits above the scroller rather than inside it, so it is simply always
+   there rather than stickily there. */
+#formatbar {
+  flex: none;
+  display: flex;
+  justify-content: center;
+  padding: var(--s2) 0 0;
+}
+.formatbar {
+  display: flex;
+  align-items: center;
+  gap: var(--s1);
+  width: var(--page-w);
+  max-width: 100%;
+  height: 38px;
+  padding: 0 var(--s2);
+  border-radius: 2px;
+  background: var(--rail);
+  overflow: hidden;
+}
+.fb-spacer { flex: 1; }
+.fb-hidden { display: none !important; }
+.fb-group { display: flex; align-items: center; gap: 1px; }
+

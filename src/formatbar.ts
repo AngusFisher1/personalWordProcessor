@@ -1,261 +1,286 @@
-import type { BlockAlign, BlockFormat, StyleId } from './model';
-import { STYLE_IDS } from './model';
-import { DOC_FONT, STYLES } from './styles';
-import { docEl } from './render';
-import { canvasEl } from './shell';
+import {
+  command,
+  formatShortcut,
+  isEnabled,
+  labelOf,
+  runCommand,
+} from './registry';
 import { openMenuAt } from './ui';
+import type { MenuItem } from './ui';
+import { DOC_FONT, STYLES } from './styles';
+import { STYLE_IDS } from './model';
 
 /**
- * The formatting bar that appears over a selection.
+ * The format bar, pinned above the page.
  *
- * The rail is where you go to find out what exists; this is where you go
- * when you already know. Selecting a phrase and reaching 250px left to bold
- * it is the single most repeated gesture in the program, and the bar exists
- * to make that gesture local.
+ * Exactly the page's width and aligned with it, because it acts on what is
+ * on the page and a bar wider than the paper reads as part of the window
+ * instead. Quieter than the page too: no boxed outlines until hover, so the
+ * only thing in the room with weight is still the document.
  *
- * It lives in the canvas overlay rather than inside a page, for the same
- * reason the gutter does: anything inside `.page` is inside the
- * contenteditable and would end up in the printed output.
+ * Every control here runs a registered command. Nothing in this file knows
+ * what Bold does - it knows that `format.bold` exists, what it is called,
+ * whether it is on, and what its shortcut is.
  */
 
-export interface FormatHost {
-  bold(): void;
-  italic(): void;
-  underline(): void;
-  setStyle(id: StyleId): void;
-  currentStyle(): StyleId | null;
-  inlineState(): { bold: boolean; italic: boolean; underline: boolean };
-  setAlign(align: BlockAlign): void;
-  currentFormat(): BlockFormat;
-  /** Suppressed while another surface owns the selection. */
-  suppressed(): boolean;
+let bar: HTMLElement | null = null;
+let onChanged: (() => void) | null = null;
+
+/** Lowest priority first: these are the ones the overflow eats. */
+const PRIORITY = ['fb-leading', 'fb-size', 'fb-insert', 'fb-align'];
+
+function run(id: string): void {
+  runCommand(id);
+  onChanged?.();
 }
 
-/**
- * Alignment, drawn as the lines it produces.
- *
- * Three bars of uneven width, laid out the way the paragraph would be. A
- * glyph would need an icon font, and the four alignments have no distinct
- * characters in any font we can rely on - they would all come out as ≡.
- */
-const ALIGNS: { id: BlockAlign; title: string; bars: number[] }[] = [
-  { id: 'left', title: 'Align left', bars: [100, 62, 84] },
-  { id: 'center', title: 'Centre', bars: [100, 62, 84] },
-  { id: 'right', title: 'Align right', bars: [100, 62, 84] },
-  { id: 'justify', title: 'Justify', bars: [100, 100, 100] },
-];
+/** A menu row that runs a command, reading everything about it from one place. */
+function itemFor(id: string, extra: Partial<MenuItem> = {}): MenuItem {
+  const c = command(id);
+  if (!c) return { label: id, disabled: true };
+  return {
+    label: labelOf(c),
+    hint: formatShortcut(c.shortcut),
+    checked: c.checked?.() ?? false,
+    disabled: !isEnabled(c),
+    onSelect: () => run(id),
+    ...extra,
+  };
+}
 
-let host: FormatHost | null = null;
-let bar: HTMLElement | null = null;
-let styleLabel: HTMLElement | null = null;
-let marks: Record<'bold' | 'italic' | 'underline', HTMLElement> | null = null;
-let aligns: { id: BlockAlign; el: HTMLElement }[] = [];
-let timer = 0;
-/** A menu opened from the bar must not make the bar hide itself. */
-let pinned = false;
-
-function button(
-  label: string,
-  title: string,
+function iconButton(
+  id: string,
   cls: string,
-  onClick: () => void
+  content: (b: HTMLElement) => void
 ): HTMLElement {
+  const c = command(id);
   const b = document.createElement('button');
+  b.type = 'button';
   b.className = 'fb-btn ' + cls;
-  b.textContent = label;
-  b.title = title;
+  // The button remembers which command it runs, so a state refresh can
+  // find it again without rebuilding the bar.
+  b.dataset.cmd = id;
+  const label = c ? labelOf(c) : id;
+  const hint = formatShortcut(c?.shortcut);
+  // "Bold · Ctrl+B", everywhere, rather than a shortcut printed on some
+  // buttons and missing from others.
+  b.title = hint ? label + ' · ' + hint : label;
+  b.setAttribute('aria-label', b.title);
+  b.setAttribute('aria-pressed', String(c?.checked?.() ?? false));
+  if (c?.checked?.()) b.classList.add('on');
+  if (c && !isEnabled(c)) b.disabled = true;
+  content(b);
   b.addEventListener('mousedown', (e) => e.preventDefault());
   b.addEventListener('click', (e) => {
     e.preventDefault();
-    onClick();
-    sync();
+    run(id);
   });
   return b;
+}
+
+function menuButton(
+  label: string,
+  title: string,
+  cls: string,
+  rows: () => MenuItem[]
+): HTMLElement {
+  const b = document.createElement('button');
+  b.type = 'button';
+  b.className = 'fb-btn ' + cls;
+  b.title = title;
+  b.setAttribute('aria-label', title);
+  b.setAttribute('aria-haspopup', 'menu');
+  const text = document.createElement('span');
+  text.textContent = label;
+  b.appendChild(text);
+  const caret = document.createElement('span');
+  caret.className = 'fb-caret';
+  b.appendChild(caret);
+  b.addEventListener('mousedown', (e) => e.preventDefault());
+  b.addEventListener('click', () => openMenuAt(b, rows()));
+  return b;
+}
+
+function divider(): HTMLElement {
+  const d = document.createElement('span');
+  d.className = 'fb-sep';
+  return d;
+}
+
+/** Three bars laid out the way the paragraph would be. */
+function alignIcon(which: string): (b: HTMLElement) => void {
+  const widths = which === 'justify' ? [100, 100, 100] : [100, 62, 84];
+  return (b) => {
+    for (const w of widths) {
+      const i = document.createElement('i');
+      i.style.width = w + '%';
+      b.appendChild(i);
+    }
+  };
+}
+
+/* ------------------------------------------------------------------ *
+ * Drawing
+ * ------------------------------------------------------------------ */
+
+function currentStyleLabel(): string {
+  for (const id of STYLE_IDS) {
+    if (command('format.style.' + id)?.checked?.()) return STYLES[id].label;
+  }
+  return 'Mixed';
+}
+
+function currentSizeLabel(): string {
+  const hit = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 24, 36].find((v) =>
+    command('format.size.' + v)?.checked?.()
+  );
+  return hit === undefined ? 'Size' : hit + ' pt';
+}
+
+function stylePreview(id: (typeof STYLE_IDS)[number]): Partial<CSSStyleDeclaration> {
+  const d = STYLES[id];
+  return {
+    fontFamily: DOC_FONT,
+    fontSize: Math.min(19, Math.max(12, d.size * 1.2)) + 'px',
+    fontWeight: d.bold ? '700' : '400',
+    textTransform: d.uppercase ? 'uppercase' : 'none',
+    letterSpacing: d.letterSpacing ? d.letterSpacing + 'px' : 'normal',
+  };
 }
 
 function build(): HTMLElement {
   const el = document.createElement('div');
   el.className = 'formatbar';
+  el.setAttribute('role', 'toolbar');
+  el.setAttribute('aria-label', 'Formatting');
   el.addEventListener('mousedown', (e) => e.preventDefault());
 
-  const style = document.createElement('button');
-  style.className = 'fb-btn fb-style';
-  style.title = 'Paragraph style';
-  styleLabel = document.createElement('span');
-  style.appendChild(styleLabel);
-  const caret = document.createElement('span');
-  caret.className = 'fb-caret';
-  style.appendChild(caret);
-  style.addEventListener('mousedown', (e) => e.preventDefault());
-  style.addEventListener('click', () => {
-    const current = host?.currentStyle() ?? null;
-    pinned = true;
-    openMenuAt(
-      style,
-      STYLE_IDS.map((id) => {
-        const d = STYLES[id];
-        return {
-          label: d.label,
-          checked: id === current,
-          preview: {
-            fontFamily: DOC_FONT,
-            fontSize: Math.min(19, Math.max(12, d.size * 1.2)) + 'px',
-            fontWeight: d.bold ? '700' : '400',
-            textTransform: d.uppercase ? 'uppercase' : 'none',
-            letterSpacing: d.letterSpacing ? d.letterSpacing + 'px' : 'normal',
-          },
-          onSelect: () => {
-            pinned = false;
-            host?.setStyle(id);
-            sync();
-          },
-        };
-      })
+  // A picker shows the value it holds, so this reads "Body" or "Job title".
+  el.appendChild(
+    menuButton(currentStyleLabel(), 'Paragraph style', 'fb-style', () =>
+      STYLE_IDS.map((id) =>
+        itemFor('format.style.' + id, { preview: stylePreview(id) })
+      )
+    )
+  );
+  el.appendChild(divider());
+
+  el.appendChild(iconButton('format.bold', 'fb-b', (b) => (b.textContent = 'B')));
+  el.appendChild(iconButton('format.italic', 'fb-i', (b) => (b.textContent = 'I')));
+  el.appendChild(iconButton('format.underline', 'fb-u', (b) => (b.textContent = 'U')));
+  el.appendChild(divider());
+
+  const aligns = document.createElement('span');
+  aligns.className = 'fb-group fb-align';
+  for (const which of ['left', 'center', 'right', 'justify']) {
+    aligns.appendChild(
+      iconButton('format.align.' + which, 'fb-alignbtn fb-align-' + which, alignIcon(which))
     );
-    // A menu dismissed without choosing must not leave the bar stuck open.
-    setTimeout(() => {
-      pinned = false;
-    }, 0);
-  });
-  el.appendChild(style);
+  }
+  el.appendChild(aligns);
 
-  const sep = document.createElement('span');
-  sep.className = 'fb-sep';
-  el.appendChild(sep);
+  el.appendChild(
+    menuButton(currentSizeLabel(), 'Text size and colour', 'fb-size', () => [
+      { heading: 'Size' },
+      ...[8, 9, 10, 10.5, 11, 12, 14, 16, 18, 24, 36].map((v) =>
+        itemFor('format.size.' + v)
+      ),
+      { separator: true },
+      { heading: 'Colour' },
+      ...['default', '000000', '595959', 'C00000', 'B45309', '2E6B33', '1F4E79', '5B2D8E'].map(
+        (c) =>
+          itemFor(
+            'format.colour.' + c,
+            c === 'default' ? {} : { swatch: '#' + c, swatchBg: '#' + c }
+          )
+      ),
+    ])
+  );
 
-  const b = button('B', 'Bold', 'fb-b', () => host?.bold());
-  const i = button('I', 'Italic', 'fb-i', () => host?.italic());
-  const u = button('U', 'Underline', 'fb-u', () => host?.underline());
-  el.append(b, i, u);
-  marks = { bold: b, italic: i, underline: u };
+  el.appendChild(
+    menuButton('Spacing', 'Line spacing', 'fb-leading', () => [
+      { heading: 'Line spacing' },
+      ...[1, 1.15, 1.5, 2].map((v) => itemFor('format.leading.' + v)),
+      { separator: true },
+      itemFor('format.clearParagraph'),
+    ])
+  );
 
-  const sep2 = document.createElement('span');
-  sep2.className = 'fb-sep';
-  el.appendChild(sep2);
+  el.appendChild(divider());
+  el.appendChild(
+    menuButton('Insert', 'Insert', 'fb-insert', () => [
+      { heading: 'Table' },
+      ...[
+        [2, 2],
+        [3, 2],
+        [3, 3],
+        [4, 3],
+        [5, 2],
+        [6, 4],
+      ].map(([r, c]) => itemFor(`insert.table.${r}x${c}`, { label: `${r} × ${c}` })),
+      { separator: true },
+      itemFor('insert.image'),
+      itemFor('insert.link'),
+      itemFor('insert.pageBreak'),
+    ])
+  );
 
-  aligns = ALIGNS.map((a) => {
-    const btn = button('', a.title, 'fb-align fb-align-' + a.id, () => host?.setAlign(a.id));
-    for (const w of a.bars) {
-      const bar = document.createElement('i');
-      bar.style.width = w + '%';
-      btn.appendChild(bar);
-    }
-    el.appendChild(btn);
-    return { id: a.id, el: btn };
-  });
+  const spacer = document.createElement('span');
+  spacer.className = 'fb-spacer';
+  el.appendChild(spacer);
 
+  el.appendChild(
+    iconButton('app.palette', 'fb-more', (b) => (b.textContent = '⋯'))
+  );
   return el;
 }
 
-/** Update the bar's own state from the selection it is sitting over. */
-function sync(): void {
-  if (!bar || !host) return;
-  const st = host.currentStyle();
-  if (styleLabel) styleLabel.textContent = st ? STYLES[st].label : 'Mixed';
-  const on = host.inlineState();
-  marks?.bold.classList.toggle('on', on.bold);
-  marks?.italic.classList.toggle('on', on.italic);
-  marks?.underline.classList.toggle('on', on.underline);
-  const align = host.currentFormat().align ?? 'left';
-  for (const a of aligns) a.el.classList.toggle('on', a.id === align);
-}
-
-function hide(): void {
-  bar?.remove();
-  bar = null;
-  styleLabel = null;
-  marks = null;
-  aligns = [];
-}
-
 /**
- * Where the bar goes: centred over the selection, above it if there is room
- * and below it if there is not, and never off the side of the canvas.
- */
-function place(rect: DOMRect): void {
-  if (!bar) return;
-  const canvas = canvasEl();
-  const c = canvas.getBoundingClientRect();
-  const w = bar.offsetWidth || 220;
-  const h = bar.offsetHeight || 32;
-  const gap = 9;
-
-  let left = rect.left - c.left + rect.width / 2 - w / 2;
-  left = Math.max(8, Math.min(left, c.width - w - 8));
-
-  let top = rect.top - c.top - h - gap;
-  if (top < 4) top = rect.bottom - c.top + gap;
-
-  bar.style.left = Math.round(left) + 'px';
-  bar.style.top = Math.round(top) + 'px';
-}
-
-/**
- * The selection's rectangle, or null if there is nothing to format.
+ * Move low-priority groups into the overflow until the bar fits the page.
  *
- * getBoundingClientRect on a range spanning several lines gives the union,
- * whose centre is the middle of the paragraph. The FIRST rect is the first
- * line, which is where the eye is, so the bar goes over that.
+ * The bar is exactly the page's width by definition, so "too wide" means
+ * the contents, not the bar. Nothing is hidden without somewhere to go:
+ * what leaves is always still in the palette behind the same button.
  */
-function selectionRect(): DOMRect | null {
-  const sel = window.getSelection();
-  if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
-  const range = sel.getRangeAt(0);
-  if (range.toString().trim() === '') return null;
-  const root = docEl();
-  if (!root.contains(range.commonAncestorContainer)) return null;
-  const rects = Array.from(range.getClientRects()).filter((r) => r.height > 0.5);
-  const first = rects[0] ?? range.getBoundingClientRect();
-  return first.width === 0 && first.height === 0 ? null : (first as DOMRect);
-}
-
-function update(): void {
-  if (!host || host.suppressed() || pinned) {
-    if (!pinned) hide();
-    return;
+function applyOverflow(): void {
+  if (!bar) return;
+  for (const cls of PRIORITY) {
+    bar.querySelector('.' + cls)?.classList.remove('fb-hidden');
   }
-  const rect = selectionRect();
-  if (!rect) {
-    hide();
-    return;
+  for (const cls of PRIORITY) {
+    if (bar.scrollWidth <= bar.clientWidth) break;
+    bar.querySelector('.' + cls)?.classList.add('fb-hidden');
   }
-  if (!bar) {
-    bar = build();
-    canvasEl().appendChild(bar);
+}
+
+export function renderFormatBar(): void {
+  const hostEl = document.getElementById('formatbar');
+  if (!hostEl) return;
+  hostEl.textContent = '';
+  bar = build();
+  hostEl.appendChild(bar);
+  applyOverflow();
+}
+
+export function bindFormatBar(changed: () => void): void {
+  onChanged = changed;
+  window.addEventListener('resize', applyOverflow);
+}
+
+/** Re-read every control's state without rebuilding the bar. */
+export function syncFormatBar(): void {
+  if (!bar) return;
+  for (const b of Array.from(bar.querySelectorAll('button[data-cmd]'))) {
+    const el = b as HTMLButtonElement;
+    const c = command(el.dataset.cmd as string);
+    if (!c) continue;
+    const on = c.checked?.() ?? false;
+    el.classList.toggle('on', on);
+    el.setAttribute('aria-pressed', String(on));
+    el.disabled = !isEnabled(c);
   }
-  sync();
-  place(rect);
-}
-
-function schedule(): void {
-  // Coalesced on a timer rather than a frame. selectionchange fires for
-  // every character of a drag and each update measures, so the batching is
-  // necessary - but requestAnimationFrame does not run at all when the page
-  // is considered hidden, and a bar that never appears in an embedded or
-  // backgrounded view is worse than one that measures a millisecond late.
-  clearTimeout(timer);
-  timer = window.setTimeout(update, 0);
-}
-
-export function refreshFormatBar(): void {
-  schedule();
-}
-
-export function hideFormatBar(): void {
-  pinned = false;
-  hide();
-}
-
-export function bindFormatBar(h: FormatHost): void {
-  host = h;
-  document.addEventListener('selectionchange', schedule);
-  // Scrolling moves the selection under the bar, so the bar follows it.
-  canvasEl().addEventListener('scroll', schedule, { passive: true });
-  docEl().addEventListener('scroll', schedule, { passive: true });
-  window.addEventListener('resize', schedule);
-  // Typing replaces the selection; the bar should be gone before the
-  // character lands, not a frame later.
-  docEl().addEventListener('keydown', (e) => {
-    if (e.key.length === 1 || e.key === 'Backspace' || e.key === 'Delete') hide();
-  });
+  const style = bar.querySelector('.fb-style span') as HTMLElement | null;
+  if (style) style.textContent = currentStyleLabel();
+  const size = bar.querySelector('.fb-size span') as HTMLElement | null;
+  if (size) size.textContent = currentSizeLabel();
 }

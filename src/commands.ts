@@ -1,4 +1,4 @@
-import type { BlockFormat, StyleId } from './model';
+import type { BlockFormat, RunStyle, StyleId } from './model';
 import { newId, tidyFormat } from './model';
 import { STYLES, styleClass, styleOf } from './styles';
 import {
@@ -24,6 +24,7 @@ import {
 import { paginate, paginateIfNeeded } from './paginate';
 import { flushTyping, redo, snapshot, undo } from './history';
 import { arrowInTable, tabInTable } from './tables';
+import { applyRunStyle, runStyleOfRange } from './runs';
 
 /** Broadcast so main.ts can autosave and refresh the toolbar. */
 export function notifyChanged(): void {
@@ -153,6 +154,54 @@ export function setBlockStyle(styleId: StyleId): void {
   }
   snapshot('structural');
   notifyChanged();
+}
+
+/* ------------------------------------------------------------------ *
+ * Direct character formatting
+ * ------------------------------------------------------------------ */
+
+function selectionRange(): Range | null {
+  const s = sel();
+  if (!s) return null;
+  const r = s.getRangeAt(0);
+  return docEl().contains(r.commonAncestorContainer) ? r : null;
+}
+
+/**
+ * Apply a size, font or colour to the selected characters.
+ *
+ * Unlike a paragraph property this works on a RANGE, so it has to survive a
+ * selection that starts inside one run span and ends inside another, and a
+ * selection that crosses a page break - where the paragraph is two elements.
+ * Both fall out of walking text nodes rather than elements.
+ */
+export function setRunStyle(change: Partial<Record<keyof RunStyle, unknown>>): void {
+  flushTyping();
+  const range = selectionRange();
+  if (!range || range.collapsed) return;
+  applyRunStyle(range, change);
+  // The selection survives the splitting, but the caret record is taken
+  // after, because the text nodes it pointed at may no longer exist.
+  const caret = getCaret();
+  paginate();
+  if (caret) {
+    docEl().focus();
+    placeCaret(caret);
+  }
+  snapshot('structural');
+  notifyChanged();
+}
+
+export function currentRunStyle(): RunStyle {
+  const range = selectionRange();
+  if (!range) return {};
+  return runStyleOfRange(range);
+}
+
+/** True when there is something to format: a real, non-empty selection. */
+export function hasSelection(): boolean {
+  const r = selectionRange();
+  return !!r && !r.collapsed && r.toString().length > 0;
 }
 
 /* ------------------------------------------------------------------ *

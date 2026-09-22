@@ -1,5 +1,6 @@
-import type { Block, BlockFormat, Doc, ParagraphBlock, TableBlock } from './model';
-import { isTable, plainText, sameFormat, sectionsOf } from './model';
+import type { Block, BlockFormat, Doc, ParagraphBlock, RunStyle, TableBlock } from './model';
+import { hasRunStyle, isTable, plainText, sameFormat, sectionsOf } from './model';
+import { isRunSpan, readRunStyle } from './runs';
 import type { RunProp, Vault } from './docx-package';
 import { addWarning } from './docx-package';
 
@@ -83,8 +84,49 @@ const RPR_ORDER = [
   'rtl', 'cs', 'em', 'lang', 'eastAsianLayout', 'specVanish', 'oMath',
 ];
 
-function rPrXml(f: Flags, base: RunProp[] | undefined): string {
-  const props: RunProp[] = base ? base.slice() : [];
+/**
+ * A run's own overrides, as w:rPr children.
+ *
+ * Size writes both w:sz and w:szCs, the way Word does: a file with one and
+ * not the other renders at the right size in Latin text and the wrong one
+ * in anything Word considers complex script.
+ */
+function runStyleProps(r: RunStyle | undefined): RunProp[] {
+  if (!hasRunStyle(r)) return [];
+  const out: RunProp[] = [];
+  if (r.font !== undefined) {
+    const f = escAttr(r.font);
+    out.push({
+      name: 'rFonts',
+      xml: `<w:rFonts w:ascii="${f}" w:hAnsi="${f}" w:cs="${f}"/>`,
+    });
+  }
+  if (r.strike) out.push({ name: 'strike', xml: '<w:strike/>' });
+  if (r.color !== undefined) {
+    out.push({ name: 'color', xml: `<w:color w:val="${escAttr(r.color)}"/>` });
+  }
+  if (r.size !== undefined) {
+    const half = Math.round(r.size * 2);
+    out.push({ name: 'sz', xml: `<w:sz w:val="${half}"/>` });
+    out.push({ name: 'szCs', xml: `<w:szCs w:val="${half}"/>` });
+  }
+  if (r.vert !== undefined) {
+    out.push({
+      name: 'vertAlign',
+      xml: `<w:vertAlign w:val="${r.vert === 'super' ? 'superscript' : 'subscript'}"/>`,
+    });
+  }
+  return out;
+}
+
+function rPrXml(f: Flags, base: RunProp[] | undefined, run?: RunStyle): string {
+  const overrides = runStyleProps(run);
+  // A size override replaces the base's szCs too, or the two disagree.
+  const replaced = new Set(overrides.map((p) => p.name));
+  if (replaced.has('sz')) replaced.add('szCs');
+  const props: RunProp[] = (base ?? [])
+    .filter((p) => !replaced.has(p.name))
+    .concat(overrides);
   if (f.b) props.push({ name: 'b', xml: '<w:b/>' });
   if (f.i) props.push({ name: 'i', xml: '<w:i/>' });
   if (f.u) props.push({ name: 'u', xml: '<w:u w:val="single"/>' });
@@ -97,11 +139,11 @@ function rPrXml(f: Flags, base: RunProp[] | undefined): string {
   return '<w:rPr>' + props.map((p) => p.xml).join('') + '</w:rPr>';
 }
 
-function runXml(text: string, f: Flags, base?: RunProp[]): string {
+function runXml(text: string, f: Flags, base?: RunProp[], run?: RunStyle): string {
   if (text === '') return '';
   return (
     '<w:r>' +
-    rPrXml(f, base) +
+    rPrXml(f, base, run) +
     '<w:t xml:space="preserve">' +
     esc(text) +
     '</w:t></w:r>'
@@ -116,14 +158,20 @@ function runsXml(html: string, vault: Vault, base?: RunProp[]): string {
 
   let out = '';
 
-  const walk = (node: Node, f: Flags, href: string | null): void => {
+  const walk = (node: Node, f: Flags, href: string | null, run?: RunStyle): void => {
     for (const n of Array.from(node.childNodes)) {
       if (n.nodeType === TEXT_NODE) {
-        out += runXml(n.textContent ?? '', f, base);
+        out += runXml(n.textContent ?? '', f, base, run);
         continue;
       }
       if (n.nodeType !== ELEMENT_NODE) continue;
       const el = n as Element;
+      if (el.tagName.toUpperCase() === 'SPAN' && isRunSpan(el)) {
+        // Character formatting, stored as the difference from the
+        // paragraph's base run properties. Nested spans merge outward-in.
+        walk(el, f, href, { ...(run ?? {}), ...(readRunStyle(el) ?? {}) });
+        continue;
+      }
       switch (el.tagName.toUpperCase()) {
         case 'BR':
           out += '<w:r><w:br/></w:r>';
@@ -139,13 +187,13 @@ function runsXml(html: string, vault: Vault, base?: RunProp[]): string {
           break;
         }
         case 'B':
-          walk(el, { ...f, b: true }, href);
+          walk(el, { ...f, b: true }, href, run);
           break;
         case 'I':
-          walk(el, { ...f, i: true }, href);
+          walk(el, { ...f, i: true }, href, run);
           break;
         case 'U':
-          walk(el, { ...f, u: true }, href);
+          walk(el, { ...f, u: true }, href, run);
           break;
         case 'A': {
           const target = el.getAttribute('href') ?? href;
@@ -156,7 +204,7 @@ function runsXml(html: string, vault: Vault, base?: RunProp[]): string {
           const rid = target ? vault.relByTarget.get(target) : undefined;
           if (rid) {
             out += '<w:hyperlink r:id="' + escAttr(rid) + '">';
-            walk(el, f, target);
+            walk(el, f, target, run);
             out += '</w:hyperlink>';
           } else {
             if (target) {
@@ -166,17 +214,17 @@ function runsXml(html: string, vault: Vault, base?: RunProp[]): string {
                 'Links added here export as plain text'
               );
             }
-            walk(el, f, target);
+            walk(el, f, target, run);
           }
           break;
         }
         default:
-          walk(el, f, href);
+          walk(el, f, href, run);
       }
     }
   };
 
-  walk(root, { b: false, i: false, u: false }, null);
+  walk(root, { b: false, i: false, u: false }, null, undefined);
   return out;
 }
 

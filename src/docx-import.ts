@@ -7,13 +7,20 @@ import type {
   HeaderFooterSet,
   PageSetup,
   ParagraphBlock,
+  RunStyle,
   Section,
   StyleId,
   TableBlock,
   TableCell,
   TableRow,
 } from './model';
-import { contentWidth as contentWidthOf, newId, tidyFormat } from './model';
+import {
+  contentWidth as contentWidthOf,
+  newId,
+  sameRunStyle,
+  tidyFormat,
+  tidyRunStyle,
+} from './model';
 import type { RunProp, Vault } from './docx-package';
 import {
   DOC_XML,
@@ -25,6 +32,7 @@ import {
 import type { ParaSignals } from './docx-infer';
 import { inferStyles, looksLikeContact } from './docx-infer';
 import { registerMedia } from './media';
+import { runSpanHtml } from './runs';
 
 /**
  * Parse OOXML directly rather than converting through HTML.
@@ -107,6 +115,37 @@ function escapeAttr(s: string): string {
  * Inline content
  * ------------------------------------------------------------------ */
 
+/**
+ * A run's own size, font, colour and decoration.
+ *
+ * Absolute, not relative: the difference against the paragraph's base is
+ * taken later, once the base is known, because a paragraph's base is itself
+ * read from its first run.
+ */
+function runStyleOf(rPr: Element | null): RunStyle | undefined {
+  if (!rPr) return undefined;
+  const out: RunStyle = {};
+  const sz = kid(rPr, 'sz');
+  if (sz) {
+    const half = intOf(wAttr(sz, 'val'), 0);
+    // Half-points, as every font size in OOXML is.
+    if (half > 0) out.size = Math.round((half / 2) * 100) / 100;
+  }
+  const fonts = kid(rPr, 'rFonts');
+  const ascii = fonts ? wAttr(fonts, 'ascii') ?? wAttr(fonts, 'hAnsi') : null;
+  if (ascii) out.font = ascii;
+  const color = wAttr(kid(rPr, 'color'), 'val');
+  // "auto" means "whatever the theme says", which is what we draw anyway.
+  if (color && color.toLowerCase() !== 'auto' && /^[0-9a-f]{6}$/i.test(color)) {
+    out.color = color.toUpperCase();
+  }
+  if (onOff(kid(rPr, 'strike'))) out.strike = true;
+  const vert = wAttr(kid(rPr, 'vertAlign'), 'val');
+  if (vert === 'superscript') out.vert = 'super';
+  else if (vert === 'subscript') out.vert = 'sub';
+  return tidyRunStyle(out);
+}
+
 interface Fmt {
   b: boolean;
   i: boolean;
@@ -114,7 +153,7 @@ interface Fmt {
 }
 
 type Piece =
-  | ({ t: 'text'; text: string; href: string | null } & Fmt)
+  | ({ t: 'text'; text: string; href: string | null; rs?: RunStyle } & Fmt)
   | { t: 'br' }
   | { t: 'img'; media: string; run: string; w: number; h: number }
   | { t: 'field'; name: string };
@@ -209,6 +248,7 @@ function emitRun(r: Element, fmt: Fmt, href: string | null, out: Piece[], ctx: C
     i: fmt.i || onOff(kid(rPr, 'i')),
     u: fmt.u || uOn(kid(rPr, 'u')),
   };
+  const rs = runStyleOf(rPr);
   for (const c of elementChildren(r)) {
     switch (c.localName) {
       case 'fldChar': {
@@ -234,17 +274,17 @@ function emitRun(r: Element, fmt: Fmt, href: string | null, out: Piece[], ctx: C
       case 't':
         // Inside a field this is the cached result, which we recompute.
         if (ctx.fieldDepth > 0) break;
-        out.push({ t: 'text', text: c.textContent ?? '', href, ...f });
+        out.push({ t: 'text', text: c.textContent ?? '', href, ...f, rs });
         break;
       case 'br':
         out.push({ t: 'br' });
         break;
       case 'tab':
         // We have no tab stops; a space keeps the words apart.
-        out.push({ t: 'text', text: ' ', href, ...f });
+        out.push({ t: 'text', text: ' ', href, ...f, rs });
         break;
       case 'noBreakHyphen':
-        out.push({ t: 'text', text: '-', href, ...f });
+        out.push({ t: 'text', text: '-', href, ...f, rs });
         break;
       case 'drawing':
       case 'pict':
@@ -312,6 +352,10 @@ function walkInline(
   }
 }
 
+/**
+ * Adjacent pieces that agree are merged first, so a paragraph whose every
+ * run is the same size becomes one span rather than one per run.
+ */
 function piecesToHtml(pieces: Piece[]): string {
   const merged: Piece[] = [];
   for (const p of pieces) {
@@ -323,7 +367,8 @@ function piecesToHtml(pieces: Piece[]): string {
       last.b === p.b &&
       last.i === p.i &&
       last.u === p.u &&
-      last.href === p.href
+      last.href === p.href &&
+      sameRunStyle(last.rs, p.rs)
     ) {
       last.text += p.text;
     } else {
@@ -353,6 +398,7 @@ function piecesToHtml(pieces: Piece[]): string {
     }
     if (p.text === '') continue;
     let t = escapeHtml(p.text);
+    if (p.rs) t = runSpanHtml(p.rs, t);
     if (p.u) t = '<u>' + t + '</u>';
     if (p.i) t = '<i>' + t + '</i>';
     if (p.b) t = '<b>' + t + '</b>';
@@ -460,8 +506,19 @@ function recognizedStyle(
  * Paragraph statistics, for inferring a style when none is given
  * ------------------------------------------------------------------ */
 
-/** rPr children we manage from the markup instead of preserving. */
-const OWNED_RUN_PROPS = new Set(['b', 'bCs', 'i', 'iCs', 'u']);
+/**
+ * rPr children we manage from the markup instead of preserving.
+ *
+ * Size, font and colour joined this list when they became editable. They
+ * used to be preserved as part of a single per-paragraph base that was then
+ * written onto every regenerated run - which is precisely how editing a line
+ * with one red word in it turned the whole line red. Each run now carries
+ * its own, absolutely, so there is no inheritance to get wrong.
+ */
+const OWNED_RUN_PROPS = new Set([
+  'b', 'bCs', 'i', 'iCs', 'u',
+  'sz', 'szCs', 'rFonts', 'color', 'strike', 'vertAlign',
+]);
 
 interface Stats {
   boldShare: number;
@@ -898,10 +955,10 @@ export async function importDocx(
       }
     }
 
+    const stats = paragraphStats(el, serialize);
     const pieces: Piece[] = [];
     walkInline(el, { b: false, i: false, u: false }, null, pieces, ctx);
     const html = piecesToHtml(pieces);
-    const stats = paragraphStats(el, serialize);
     const outline = kid(pPr, 'outlineLvl');
     const bdr = kid(pPr, 'pBdr');
 

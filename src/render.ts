@@ -10,6 +10,7 @@ import type {
 import { isTable, newId, tidyFormat } from './model';
 import { mediaUrl } from './media';
 import { applyBlockFormat, styleClass, styleOf } from './styles';
+import { RUN_ATTRS, isRunSpan, resolveRuns } from './runs';
 
 /* ------------------------------------------------------------------ *
  * Element construction
@@ -78,6 +79,7 @@ export function setFormatOf(el: HTMLElement, fmt: BlockFormat | undefined): void
 export function setBlockHtml(el: HTMLElement, html: string): void {
   el.innerHTML = html.trim() === '' ? '<br>' : html;
   resolveImages(el);
+  resolveRuns(el);
 }
 
 /**
@@ -521,6 +523,15 @@ export function cleanInline(parent: Node, opts: CleanOptions = {}): void {
         if (a.name !== 'data-field') el.removeAttribute(a.name);
       }
       el.textContent = '';
+      continue;
+    }
+    if (tag === 'SPAN' && isRunSpan(el)) {
+      // Character formatting. Only the data attributes are the document;
+      // the style attribute on it is drawn from them and is regenerated.
+      for (const a of Array.from(el.attributes)) {
+        if (!RUN_ATTRS.has(a.name)) el.removeAttribute(a.name);
+      }
+      cleanInline(el, opts);
       continue;
     }
     if (tag === 'IMG' && opts.allowImages) {

@@ -86,6 +86,72 @@ export function isStyleId(x: unknown): x is StyleId {
 }
 
 /* ------------------------------------------------------------------ *
+ * Direct character formatting
+ *
+ * 14,865 of 18,906 runs in a 63-document corpus carry a size, a font or a
+ * colour of their own - 79%, against 47% for the paragraph-level equivalent.
+ * Worse than not drawing it: the vault kept ONE base w:rPr per paragraph and
+ * wrote it onto every regenerated run, so editing a heading with one
+ * coloured word in it flattened the whole line to the first run's colour.
+ *
+ * A run style is stored as the DIFFERENCE from the paragraph's base run
+ * properties, which is what keeps the markup lean when a document sets the
+ * same font on all 400 of its runs.
+ * ------------------------------------------------------------------ */
+
+export interface RunStyle {
+  /** Points. */
+  size?: number;
+  /** Family name as the document spells it. */
+  font?: string;
+  /** Six hex digits, no leading hash. */
+  color?: string;
+  strike?: boolean;
+  vert?: 'super' | 'sub';
+}
+
+export const RUN_STYLE_KEYS: (keyof RunStyle)[] = [
+  'size',
+  'font',
+  'color',
+  'strike',
+  'vert',
+];
+
+export function hasRunStyle(r: RunStyle | undefined): r is RunStyle {
+  return !!r && RUN_STYLE_KEYS.some((k) => r[k] !== undefined);
+}
+
+export function sameRunStyle(a: RunStyle | undefined, b: RunStyle | undefined): boolean {
+  if (!hasRunStyle(a) && !hasRunStyle(b)) return true;
+  if (!hasRunStyle(a) || !hasRunStyle(b)) return false;
+  return RUN_STYLE_KEYS.every((k) => a[k] === b[k]);
+}
+
+export function tidyRunStyle(r: RunStyle): RunStyle | undefined {
+  const out: RunStyle = {};
+  for (const k of RUN_STYLE_KEYS) {
+    const v = r[k];
+    if (v !== undefined && v !== null) (out as Record<string, unknown>)[k] = v;
+  }
+  return hasRunStyle(out) ? out : undefined;
+}
+
+/** What `b` says over and above `a`; undefined when they agree. */
+export function runStyleDiff(
+  base: RunStyle | undefined,
+  run: RunStyle | undefined
+): RunStyle | undefined {
+  const out: RunStyle = {};
+  for (const k of RUN_STYLE_KEYS) {
+    const want = run?.[k];
+    const have = base?.[k];
+    if (want !== have && want !== undefined) (out as Record<string, unknown>)[k] = want;
+  }
+  return hasRunStyle(out) ? out : undefined;
+}
+
+/* ------------------------------------------------------------------ *
  * Direct paragraph formatting
  *
  * The six named styles are the vocabulary this program writes in, but they

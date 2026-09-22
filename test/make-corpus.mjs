@@ -404,6 +404,57 @@ async function directFormat() {
   );
 }
 
+/* ---------------- 7d. character formatting ---------------- */
+/**
+ * Mixed sizes, fonts and colours WITHIN paragraphs. 79% of the runs in a
+ * real corpus carry at least one of these, and the vault used to flatten
+ * them all to the first run's properties on any edit.
+ */
+async function runFormat() {
+  await save(
+    'run-format.docx',
+    new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph({
+              children: [
+                new TextRun({ text: 'Plain, then ' }),
+                new TextRun({ text: 'red', color: 'C00000' }),
+                new TextRun({ text: ', then ' }),
+                new TextRun({ text: 'large', size: 36 }),
+                new TextRun({ text: ', then ' }),
+                new TextRun({ text: 'Courier', font: 'Courier New' }),
+                new TextRun({ text: ', then ' }),
+                new TextRun({ text: 'struck', strike: true }),
+                new TextRun({ text: ', then x' }),
+                new TextRun({ text: '2', superScript: true }),
+                new TextRun({ text: ' and H' }),
+                new TextRun({ text: '2', subScript: true }),
+                new TextRun({ text: 'O.' }),
+              ],
+            }),
+            new Paragraph({
+              children: [
+                new TextRun({ text: 'A whole paragraph at one size. ', size: 28 }),
+                new TextRun({ text: 'Still the same size here. ', size: 28 }),
+                new TextRun({ text: lorem, size: 28 }),
+              ],
+            }),
+            new Paragraph({
+              children: [
+                new TextRun({ text: 'Bold and coloured together', bold: true, color: '1F4E79' }),
+                new TextRun({ text: ' beside plain text. ' }),
+                new TextRun({ text: lorem }),
+              ],
+            }),
+          ],
+        },
+      ],
+    })
+  );
+}
+
 /* ---------------- 8. hyperlinks and unusual font ---------------- */
 async function links() {
   await save(
@@ -610,6 +661,7 @@ await legal();
 await letterhead();
 await twoSections();
 await directFormat();
+await runFormat();
 await links();
 await withImages();
 await directResume();

@@ -29,10 +29,13 @@ import {
   bindShortcuts,
   clearBlockFormat,
   currentFormat,
+  currentRunStyle,
   currentStyle,
+  hasSelection,
   inlineState,
   setBlockFormat,
   setBlockStyle,
+  setRunStyle,
   toggleInline,
 } from './commands';
 import { caretAtStart, getCaret, placeCaret } from './caret';
@@ -116,6 +119,7 @@ const ui = {
   style: null as ReturnType<typeof menuButton> | null,
   page: null as ReturnType<typeof menuButton> | null,
   para: null as ReturnType<typeof menuButton> | null,
+  text: null as ReturnType<typeof menuButton> | null,
   hf: null as HTMLButtonElement | null,
   palette: null as ReturnType<typeof menuButton> | null,
   title: null as HTMLInputElement | null,
@@ -142,6 +146,27 @@ const ALIGNMENTS: { id: BlockAlign; label: string; key: string }[] = [
   { id: 'center', label: 'Centre', key: 'e' },
   { id: 'right', label: 'Right', key: 'r' },
   { id: 'justify', label: 'Justified', key: 'j' },
+];
+
+/** Points. The sizes a document actually uses, not a continuous spinner. */
+const FONT_SIZES = [8, 9, 10, 10.5, 11, 12, 14, 16, 18, 24, 36];
+
+/**
+ * A short palette of ink colours.
+ *
+ * Named rather than a picker: a document with six arbitrary hex colours in
+ * it is a document nobody can restyle later, and every one of these reads on
+ * white paper in print.
+ */
+const INK_COLORS: { label: string; value: string | null }[] = [
+  { label: 'Default', value: null },
+  { label: 'Black', value: '000000' },
+  { label: 'Grey', value: '595959' },
+  { label: 'Red', value: 'C00000' },
+  { label: 'Orange', value: 'B45309' },
+  { label: 'Green', value: '2E6B33' },
+  { label: 'Blue', value: '1F4E79' },
+  { label: 'Purple', value: '5B2D8E' },
 ];
 
 const LINE_SPACINGS = [
@@ -244,6 +269,56 @@ function buildToolbar(host: HTMLElement): void {
     'tb-style'
   );
   host.appendChild(ui.style.el);
+
+  // Character formatting. Disabled with no selection, because every entry
+  // applies to a range: there is nothing to size or colour without one.
+  ui.text = menuButton('Text', 'Size, font, colour and decoration', () => {
+    const r = currentRunStyle();
+    const none = !hasSelection();
+    const row = (label: string, on: boolean, run: () => void, extra = {}) => ({
+      label,
+      checked: on,
+      disabled: none,
+      onSelect: run,
+      ...extra,
+    });
+    return [
+      { heading: none ? 'Select text first' : 'Size' },
+      ...(none
+        ? []
+        : FONT_SIZES.map((v) =>
+            row(v + ' pt', r.size === v, () => setRunStyle({ size: v }))
+          )),
+      ...(none ? [] : [{ separator: true as const }, { heading: 'Colour' }]),
+      ...(none
+        ? []
+        : INK_COLORS.map((c) =>
+            row(
+              c.label,
+              (r.color ?? null) === c.value,
+              () => setRunStyle({ color: c.value }),
+              c.value ? { swatch: '#' + c.value, swatchBg: '#' + c.value } : {}
+            )
+          )),
+      ...(none ? [] : [{ separator: true as const }]),
+      ...(none
+        ? []
+        : [
+            row('Strikethrough', !!r.strike, () => setRunStyle({ strike: !r.strike })),
+            row('Superscript', r.vert === 'super', () =>
+              setRunStyle({ vert: r.vert === 'super' ? null : 'super' })
+            ),
+            row('Subscript', r.vert === 'sub', () =>
+              setRunStyle({ vert: r.vert === 'sub' ? null : 'sub' })
+            ),
+            { separator: true as const },
+            row('Clear character formatting', false, () =>
+              setRunStyle({ size: null, font: null, color: null, strike: null, vert: null })
+            ),
+          ]),
+    ];
+  });
+  host.appendChild(ui.text.el);
 
   // Direct formatting: what the document asks for over and above its style.
   ui.para = menuButton('Paragraph', 'Alignment, indents and spacing', () => {
@@ -971,6 +1046,37 @@ function commands(): Command[] {
     hint: MOD + 'U',
     checked: inline.underline,
   });
+
+  const run = currentRunStyle();
+  if (hasSelection()) {
+    for (const v of FONT_SIZES) {
+      add('TEXT', v + ' pt', () => setRunStyle({ size: v }), {
+        checked: run.size === v,
+        keywords: 'font size point text',
+      });
+    }
+    for (const c of INK_COLORS) {
+      add('TEXT', 'Colour — ' + c.label, () => setRunStyle({ color: c.value }), {
+        checked: (run.color ?? null) === c.value,
+        keywords: 'colour color ink text',
+      });
+    }
+    add('TEXT', 'Strikethrough', () => setRunStyle({ strike: !run.strike }), {
+      checked: !!run.strike,
+    });
+    add('TEXT', 'Superscript', () =>
+      setRunStyle({ vert: run.vert === 'super' ? null : 'super' }), {
+      checked: run.vert === 'super',
+    });
+    add('TEXT', 'Subscript', () =>
+      setRunStyle({ vert: run.vert === 'sub' ? null : 'sub' }), {
+      checked: run.vert === 'sub',
+    });
+    add('TEXT', 'Clear character formatting', () =>
+      setRunStyle({ size: null, font: null, color: null, strike: null, vert: null }), {
+      keywords: 'reset size colour font',
+    });
+  }
 
   const fmt = currentFormat();
   for (const a of ALIGNMENTS) {

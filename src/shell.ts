@@ -724,9 +724,11 @@ export interface Readout {
 
 /** Opens the inspector at Page setup; set by main.ts. */
 let onPageSetup: (() => void) | null = null;
+let onSettings: (() => void) | null = null;
 
-export function setStatusHooks(pageSetup: () => void): void {
+export function setStatusHooks(pageSetup: () => void, settings: () => void): void {
   onPageSetup = pageSetup;
+  onSettings = settings;
 }
 
 /**
@@ -767,6 +769,19 @@ export function updateReadout(r: Readout): void {
   const saved = el('span', 'status-saved', r.saved);
   if (r.savedFailed) saved.classList.add('err');
   right.appendChild(saved);
+
+  // The gear lives here rather than in the nav panel, which is allowed to
+  // hold navigation and nothing else.
+  const gear = document.createElement('button');
+  gear.className = 'status-btn status-gear';
+  gear.type = 'button';
+  gear.textContent = '⚙';
+  gear.title = 'Settings';
+  gear.setAttribute('aria-label', 'Settings');
+  gear.addEventListener('mousedown', (e) => e.preventDefault());
+  gear.addEventListener('click', () => onSettings?.());
+  right.appendChild(gear);
+
   n.appendChild(right);
 }
 

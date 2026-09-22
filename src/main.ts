@@ -90,6 +90,12 @@ import { closeMenu, openMenuAt } from './ui';
 import { ask, isAskOpen } from './ask';
 import { bindMobile, closeDrawer } from './mobile';
 import { bindInspector, renderInspector as drawInspector } from './inspector';
+import {
+  bindSettings,
+  closeSettings,
+  isSettingsOpen,
+  openSettingsSheet,
+} from './settings';
 import type { Version } from './versions';
 import { forgetVersions, keepVersion, listVersions, whenLabel } from './versions';
 import {
@@ -1048,9 +1054,9 @@ function afterPageChange(): void {
   renderInspector();
 }
 
-/** Filled in by the settings commit. */
 function openSettings(): void {
-  flashRail('SETTINGS COMING');
+  closeMenu();
+  openSettingsSheet();
 }
 
 /** The version list, as a menu off whatever opened it. */
@@ -1166,6 +1172,7 @@ function openDoc(d: Doc): void {
   if (isFindOpen()) closeFind();
   if (isCommandsOpen()) closeCommands();
   if (isExportSheetOpen()) closeExportSheet();
+  if (isSettingsOpen()) closeSettings();
   hideBubble();
   doc = d;
   // Font before geometry: setPageSetup clears the height cache, and every
@@ -1362,7 +1369,7 @@ function boot(): void {
         return;
       }
     }
-    if (isCommandsOpen() || isAskOpen()) return; // they own the keyboard
+    if (isCommandsOpen() || isAskOpen() || isSettingsOpen()) return; // they own the keyboard
 
     const hit = commandForEvent(e);
     if (!hit || !isEnabled(hit)) return;
@@ -1371,7 +1378,10 @@ function boot(): void {
     setUiState({ recent: recentIds() });
   });
 
-  setStatusHooks(() => openInspector('page'));
+  setStatusHooks(
+    () => openInspector('page'),
+    () => openSettings()
+  );
   bindInspector({
     doc: () => doc,
     setPaper: (width, height) => {
@@ -1410,6 +1420,15 @@ function boot(): void {
     },
     editHeaderFooter: () => toggleHF(),
     print: () => void printDocument(),
+  });
+
+  bindSettings({
+    currentPaletteId: () => currentPaletteId(),
+    setPalette: (id) => setPalette(id),
+    styleRows: (id) => styleEditorRows(id),
+    resetStyles: () => resetStyles(),
+    stylesChanged: () => !!doc.styles,
+    storage: () => ({ documents: readIndex().length, bytes: storageBytes() }),
   });
 
   bindFormatBar(() => updateToolbar());
